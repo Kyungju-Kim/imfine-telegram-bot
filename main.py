@@ -72,11 +72,19 @@ async def scheduled_daily(app):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_chat.id
     user = get_user(telegram_id)
-    status = f"✅ 등록됨: *{user['notion_name']}*" if user else "❗ 미등록"
+
+    if not user:
+        await update.message.reply_text(
+            f"안녕! 전사 일정 봇이야 👋\n\n"
+            f"노션 이름으로 등록하면 바로 사용할 수 있어!\n"
+            f"`/register 홍길동`",
+            parse_mode="Markdown"
+        )
+        return
 
     await update.message.reply_text(
         f"안녕! 전사 일정 봇이야 👋\n"
-        f"상태: {status}\n\n"
+        f"상태: ✅ 등록됨: *{user['notion_name']}*\n\n"
         f"*사용법*\n"
         f"`/register 홍길동` - 노션 이름으로 등록\n"
         f"`/unregister` - 등록 해제\n"
@@ -85,8 +93,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`/dayafter` - 모레 일정\n"
         f"`/in3days` - 3일 후 일정\n"
         f"`/yesterday` - 어제 일정\n"
-        f"`/date 2024-01-15` - 특정 날짜 일정\n"
-        f"📌 Chat ID: `{telegram_id}`",
+        f"`/date 2024-01-15` - 특정 날짜 일정",
         parse_mode="Markdown"
     )
 

@@ -36,7 +36,7 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
         await update.message.reply_text(
             "❗ 아직 등록이 안 됐어!\n"
             "노션 이름으로 등록해줘:\n"
-            "`/등록 홍길동`",
+            "`/register 홍길동`",
             parse_mode="Markdown"
         )
         return
@@ -93,7 +93,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /등록 홍길동
+    /register 홍길동
     노션에서 해당 이름 유저를 찾아서 매핑 저장
     """
     if not context.args:
@@ -123,7 +123,7 @@ async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ 등록 완료!\n"
         f"이름: *{notion_user['name']}*\n\n"
-        f"이제 `/오늘` 로 일정 확인해봐!",
+        f"이제 `/today` 로 일정 확인해봐!",
         parse_mode="Markdown"
     )
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
@@ -156,14 +156,14 @@ async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_specific(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("날짜를 입력해줘! 예: `/일정 2024-01-15`", parse_mode="Markdown")
+        await update.message.reply_text("날짜를 입력해줘! 예: `/date 2024-01-15`", parse_mode="Markdown")
         return
     try:
         d = date.fromisoformat(context.args[0])
         telegram_id = update.effective_chat.id
         user = get_user(telegram_id)
         if not user:
-            await update.message.reply_text("먼저 `/등록 이름` 으로 등록해줘!", parse_mode="Markdown")
+            await update.message.reply_text("먼저 `/register 이름` 으로 등록해줘!", parse_mode="Markdown")
             return
         data = await fetch_schedule(d, user["notion_user_id"])
         message = format_schedule_message(d, data)

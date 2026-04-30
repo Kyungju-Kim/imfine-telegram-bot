@@ -252,11 +252,9 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("📌 *내 일정*")
         for card in my_cards:
             title = card["title"] or "(제목 없음)"
-            time_part = f" `{card['time']}`" if card["time"] else ""
-            # 범주 제거, 회의실만 표시
             room_part = f" [{card['room']}]" if card.get("room") else ""
             if card["time"]:
-            lines.append(f"  • `{card['time']}` {title}{room_part}")
+                lines.append(f"  • `{card['time']}` {title}{room_part}")
             else:
                 lines.append(f"  • {title}{room_part}")
         lines.append("")

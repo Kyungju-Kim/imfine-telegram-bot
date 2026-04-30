@@ -256,6 +256,7 @@ def main():
     scheduler.add_job(
         scheduled_daily,
         trigger="cron",
+        day_of_week="mon-fri",  # 월~금만
         hour=8,
         minute=0,
         args=[app],

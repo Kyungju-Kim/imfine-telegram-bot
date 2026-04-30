@@ -51,8 +51,13 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
 
 async def scheduled_daily(app):
     users = list_users()
+    
+    # 등록된 유저가 없으면 아무것도 안 함
+    if not users:
+        logger.warning("[스케줄러] 등록된 유저 없음 - users.json 초기화됐을 수 있음")
+        return
+    
     target = get_target_date(0)
-
     for telegram_id, user_info in users.items():
         try:
             data = await fetch_schedule(target, user_info["notion_user_id"])
@@ -62,8 +67,16 @@ async def scheduled_daily(app):
                 text=message,
                 parse_mode="Markdown"
             )
-            logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료")
         except Exception as e:
+            # 발송 실패 시 재등록 요청
+            try:
+                await app.bot.send_message(
+                    chat_id=int(telegram_id),
+                    text=f"⚠️ 일정 발송 중 오류가 발생했어!\n`/start` 로 상태 확인해줘.",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
             logger.error(f"[스케줄러] {telegram_id} 발송 실패: {e}")
 
 
@@ -76,26 +89,28 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         await update.message.reply_text(
             f"안녕! 전사 일정 봇이야 👋\n\n"
+            f"매일 오전 8시에 오늘 일정을 자동으로 알려줄게!\n\n"
             f"노션 이름으로 등록하면 바로 사용할 수 있어!\n"
             f"`/register 홍길동`",
             parse_mode="Markdown"
         )
         return
 
-    await update.message.reply_text(
-        f"안녕! 전사 일정 봇이야 👋\n"
-        f"상태: ✅ 등록됨: *{user['notion_name']}*\n\n"
-        f"*사용법*\n"
-        f"`/register 홍길동` - 노션 이름으로 등록\n"
-        f"`/unregister` - 등록 해제\n"
-        f"`/today` - 오늘 일정\n"
-        f"`/tomorrow` - 내일 일정\n"
-        f"`/dayafter` - 모레 일정\n"
-        f"`/in3days` - 3일 후 일정\n"
-        f"`/yesterday` - 어제 일정\n"
-        f"`/date 2024-01-15` - 특정 날짜 일정",
-        parse_mode="Markdown"
-    )
+        await update.message.reply_text(
+            f"안녕! 전사 일정 봇이야 👋\n"
+            f"상태: ✅ 등록됨: *{user['notion_name']}*\n\n"
+            f"📢 매일 오전 8시에 오늘 일정을 자동으로 알려줄게!\n\n"
+            f"*사용법*\n"
+            f"`/register 홍길동` - 노션 이름으로 등록\n"
+            f"`/unregister` - 등록 해제\n"
+            f"`/today` - 오늘 일정\n"
+            f"`/tomorrow` - 내일 일정\n"
+            f"`/dayafter` - 모레 일정\n"
+            f"`/in3days` - 3일 후 일정\n"
+            f"`/yesterday` - 어제 일정\n"
+            f"`/date 2024-01-15` - 특정 날짜 일정",
+            parse_mode="Markdown"
+        )
 
 
 async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):

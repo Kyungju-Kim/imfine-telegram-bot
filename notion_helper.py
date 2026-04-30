@@ -116,7 +116,7 @@ async def find_notion_user_by_name(name: str) -> dict | None:
 # ─── 일정 조회 ────────────────────────────────────────────────────────
 
 def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
-    check_keys = ["담당자", "Assignee", "assign", "담당", "할당", "CC", "cc", "참조", "관련자", "사람"]
+    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
     for key in check_keys:
         if key in props:
             people = extract_people(props[key])
@@ -158,7 +158,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
         props = page.get("properties", {})
 
         date_prop = None
-        for key in ["날짜", "Date", "date", "일정", "기간"]:
+        for key in ["기간", "날짜", "Date", "date", "일정"]:
             if key in props:
                 date_prop = props[key]
                 break
@@ -170,7 +170,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             continue
 
         title = ""
-        for key in ["이름", "Name", "name", "제목", "Title"]:
+        for key in ["Name", "이름", "name", "제목", "Title"]:
             if key in props:
                 title = extract_text(props[key])
                 break
@@ -184,7 +184,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
         # 휴가 카드
         if "휴가" in category:
             assignees = []
-            for key in ["담당자", "Assignee", "assign", "담당", "할당", "사람"]:
+            for key in ["Assign", "담당자", "Assignee", "담당", "할당", "사람"]:
                 if key in props:
                     assignees = [p["name"] for p in extract_people(props[key])]
                     break

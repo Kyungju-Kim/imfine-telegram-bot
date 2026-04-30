@@ -130,19 +130,26 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     end_range = (target + timedelta(days=1)).isoformat()
 
     try:
-        response = await notion.databases.query(
-            database_id=DATABASE_ID,
-            filter={
+    pages = []
+    has_more = True
+    next_cursor = None
+    
+    while has_more:
+        kwargs = {
+            "database_id": DATABASE_ID,
+            "filter": {
                 "property": "기간",
                 "date": {"on_or_after": start_range}
             },
-            page_size=100
-        )
-    except Exception as e:
-        print(f"[Notion API 오류] {e}")
-        return {"vacation": {"휴가": [], "오전반차": [], "오후반차": []}, "my_cards": []}
-
-    pages = response.get("results", [])
+            "page_size": 100
+        }
+        if next_cursor:
+            kwargs["start_cursor"] = next_cursor
+    
+        response = await notion.databases.query(**kwargs)
+        pages.extend(response.get("results", []))
+        has_more = response.get("has_more", False)
+        next_cursor = response.get("next_cursor")
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": []}
     my_cards = []
 
@@ -190,7 +197,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             vacation_result[vacation_type].extend(assignees)
 
         # 내 카드
-        if _is_my_card(props, my_notion_user_id):
+         if "휴가" not in category and _is_my_card(props, my_notion_user_id):
             time_str = None
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)

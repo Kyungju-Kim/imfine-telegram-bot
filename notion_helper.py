@@ -133,17 +133,9 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
         response = await notion.databases.query(
             database_id=DATABASE_ID,
             filter={
-            "and": [
-                {
-                    "property": "기간",  # ← 기간으로 변경
-                    "date": {"on_or_after": start_range}
-                },
-                {
-                    "property": "기간",  # ← 기간으로 변경
-                    "date": {"on_or_before": end_range}
-                }
-            ]
-        },
+                "property": "기간",
+                "date": {"on_or_after": start_range}
+            },
             page_size=100
         )
     except Exception as e:
@@ -252,7 +244,7 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("📌 *내 일정*")
         for card in my_cards:
             title = card["title"] or "(제목 없음)"
-            room_part = f" [{card['room']}]" if card.get("room") else ""
+            room_part = f"  📍 {card['room']}" if card.get("room") else ""
             if card["time"]:
                 lines.append(f"  • `{card['time']}` {title}{room_part}")
             else:

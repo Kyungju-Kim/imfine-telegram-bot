@@ -127,29 +127,32 @@ def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
 
 async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     start_range = (target - timedelta(days=60)).isoformat()
-    end_range = (target + timedelta(days=1)).isoformat()
 
-    try:
     pages = []
     has_more = True
     next_cursor = None
-    
+
     while has_more:
-        kwargs = {
-            "database_id": DATABASE_ID,
-            "filter": {
-                "property": "기간",
-                "date": {"on_or_after": start_range}
-            },
-            "page_size": 100
-        }
-        if next_cursor:
-            kwargs["start_cursor"] = next_cursor
-    
-        response = await notion.databases.query(**kwargs)
-        pages.extend(response.get("results", []))
-        has_more = response.get("has_more", False)
-        next_cursor = response.get("next_cursor")
+        try:
+            kwargs = {
+                "database_id": DATABASE_ID,
+                "filter": {
+                    "property": "기간",
+                    "date": {"on_or_after": start_range}
+                },
+                "page_size": 100
+            }
+            if next_cursor:
+                kwargs["start_cursor"] = next_cursor
+
+            response = await notion.databases.query(**kwargs)
+            pages.extend(response.get("results", []))
+            has_more = response.get("has_more", False)
+            next_cursor = response.get("next_cursor")
+        except Exception as e:
+            print(f"[Notion API 오류] {e}")
+            return {"vacation": {"휴가": [], "오전반차": [], "오후반차": []}, "my_cards": []}
+
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": []}
     my_cards = []
 
@@ -187,7 +190,6 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 if key in props:
                     assignees = [p["name"] for p in extract_people(props[key])]
                     break
-            # 카드 이름으로 반차 구분
             if "[오전반차]" in title:
                 vacation_type = "오전반차"
             elif "[오후반차]" in title:
@@ -196,8 +198,8 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 vacation_type = "휴가"
             vacation_result[vacation_type].extend(assignees)
 
-        # 내 카드
-         if "휴가" not in category and _is_my_card(props, my_notion_user_id):
+        # 내 카드 (휴가 카드 제외)
+        if "휴가" not in category and _is_my_card(props, my_notion_user_id):
             time_str = None
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)
@@ -208,7 +210,6 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 else:
                     time_str = t_start
 
-            # 회의실 예약 추출
             room = ""
             for key in ["회의실 예약", "회의실", "장소"]:
                 if key in props:
@@ -221,14 +222,11 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 "room": room
             })
 
-    # 시간순 정렬 (시간 없는 카드는 맨 뒤로)
     my_cards.sort(key=lambda x: x["time"] if x["time"] else "99:99")
-
-    # 아래 3줄 추가
     vacation_result["휴가"].sort()
     vacation_result["오전반차"].sort()
     vacation_result["오후반차"].sort()
-    
+
     return {"vacation": vacation_result, "my_cards": my_cards}
 
 

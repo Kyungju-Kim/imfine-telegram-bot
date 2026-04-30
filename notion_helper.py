@@ -126,7 +126,7 @@ def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
 
 
 async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    start_range = (target - timedelta(days=7)).isoformat()
+    start_range = (target - timedelta(days=60)).isoformat()
     end_range = (target + timedelta(days=1)).isoformat()
 
     try:
@@ -217,6 +217,11 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     # 시간순 정렬 (시간 없는 카드는 맨 뒤로)
     my_cards.sort(key=lambda x: x["time"] if x["time"] else "99:99")
 
+    # 아래 3줄 추가
+    vacation_result["휴가"].sort()
+    vacation_result["오전반차"].sort()
+    vacation_result["오후반차"].sort()
+    
     return {"vacation": vacation_result, "my_cards": my_cards}
 
 

@@ -188,7 +188,13 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 if key in props:
                     assignees = [p["name"] for p in extract_people(props[key])]
                     break
-            vacation_type = title if title in ["휴가", "오전반차", "오후반차"] else "휴가"
+            # 카드 이름으로 반차 구분
+            if "[오전반차]" in title:
+                vacation_type = "오전반차"
+            elif "[오후반차]" in title:
+                vacation_type = "오후반차"
+            else:
+                vacation_type = "휴가"
             vacation_result[vacation_type].extend(assignees)
 
         # 내 카드
@@ -216,6 +222,9 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 "room": room
             })
 
+    # 시간순 정렬 (시간 없는 카드는 맨 뒤로)
+    my_cards.sort(key=lambda x: x["time"] if x["time"] else "99:99")
+
     return {"vacation": vacation_result, "my_cards": my_cards}
 
 
@@ -231,11 +240,11 @@ def format_schedule_message(target: date, data: dict) -> str:
     if has_vacation:
         lines.append("🏖 *휴가/반차*")
         if vacation["휴가"]:
-            lines.append(f"  🏝 휴가: {', '.join(vacation['휴가'])}")
+            lines.append(f"  • 휴가: {', '.join(vacation['휴가'])}")
         if vacation["오전반차"]:
-            lines.append(f"  🌅 오전반차: {', '.join(vacation['오전반차'])}")
+            lines.append(f"  • 오전반차: {', '.join(vacation['오전반차'])}")
         if vacation["오후반차"]:
-            lines.append(f"  🌇 오후반차: {', '.join(vacation['오후반차'])}")
+            lines.append(f"  • 오후반차: {', '.join(vacation['오후반차'])}")
         lines.append("")
 
     my_cards = data["my_cards"]
@@ -245,7 +254,7 @@ def format_schedule_message(target: date, data: dict) -> str:
             title = card["title"] or "(제목 없음)"
             time_part = f" `{card['time']}`" if card["time"] else ""
             # 범주 제거, 회의실만 표시
-            room_part = f" 🏢 {card['room']}" if card.get("room") else ""
+            room_part = f" [{card['room']}]" if card.get("room") else ""
             lines.append(f"  • {title}{time_part}{room_part}")
         lines.append("")
 

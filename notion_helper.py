@@ -223,12 +223,12 @@ def format_schedule_message(target: date, data: dict) -> str:
 
     if has_vacation:
         lines.append("🏖 *휴가/반차*")
+        if vacation["휴가"]:
+            lines.append(f"  🏝 휴가: {', '.join(vacation['휴가'])}")
         if vacation["오전반차"]:
             lines.append(f"  🌅 오전반차: {', '.join(vacation['오전반차'])}")
         if vacation["오후반차"]:
             lines.append(f"  🌇 오후반차: {', '.join(vacation['오후반차'])}")
-        if vacation["휴가"]:
-            lines.append(f"  🏝 휴가: {', '.join(vacation['휴가'])}")
         lines.append("")
 
     my_cards = data["my_cards"]
@@ -237,8 +237,9 @@ def format_schedule_message(target: date, data: dict) -> str:
         for card in my_cards:
             title = card["title"] or "(제목 없음)"
             time_part = f" `{card['time']}`" if card["time"] else ""
-            category_part = f" _{card['category']}_" if card["category"] else ""
-            lines.append(f"  • {title}{time_part}{category_part}")
+            # 범주 제거, 회의실만 표시
+            room_part = f" 🏢 {card['room']}" if card.get("room") else ""
+            lines.append(f"  • {title}{time_part}{room_part}")
         lines.append("")
 
     if not has_vacation and not my_cards:

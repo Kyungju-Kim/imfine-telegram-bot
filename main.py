@@ -78,14 +78,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"안녕! 전사 일정 봇이야 👋\n"
         f"상태: {status}\n\n"
         f"*사용법*\n"
-        f"`/등록 홍길동` - 노션 이름으로 등록\n"
-        f"`/등록해제` - 등록 해제\n"
-        f"`/오늘` - 오늘 일정\n"
-        f"`/내일` - 내일 일정\n"
-        f"`/모레` - 모레 일정\n"
-        f"`/글피` - 3일 후 일정\n"
-        f"`/어제` - 어제 일정\n"
-        f"`/일정 2024-01-15` - 특정 날짜 일정\n\n"
+        f"`/register 홍길동` - 노션 이름으로 등록\n"
+        f"`/unregister` - 등록 해제\n"
+        f"`/today` - 오늘 일정\n"
+        f"`/tomorrow` - 내일 일정\n"
+        f"`/dayafter` - 모레 일정\n"
+        f"`/in3days` - 3일 후 일정\n"
+        f"`/yesterday` - 어제 일정\n"
+        f"`/date 2024-01-15` - 특정 날짜 일정\n"
         f"📌 Chat ID: `{telegram_id}`",
         parse_mode="Markdown"
     )
@@ -98,7 +98,7 @@ async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     if not context.args:
         await update.message.reply_text(
-            "노션에 등록된 이름을 입력해줘!\n예: `/등록 홍길동`",
+            "노션에 등록된 이름을 입력해줘!\n예: `/register 홍길동`",
             parse_mode="Markdown"
         )
         return
@@ -177,15 +177,14 @@ async def cmd_specific(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("등록", cmd_register))
-    app.add_handler(CommandHandler("등록해제", cmd_unregister))
-    app.add_handler(CommandHandler("오늘", cmd_today))
-    app.add_handler(CommandHandler("내일", cmd_tomorrow))
-    app.add_handler(CommandHandler("모레", cmd_day_after))
-    app.add_handler(CommandHandler("글피", cmd_3days))
-    app.add_handler(CommandHandler("어제", cmd_yesterday))
-    app.add_handler(CommandHandler("일정", cmd_specific))
+    app.add_handler(CommandHandler("register", cmd_register))
+    app.add_handler(CommandHandler("unregister", cmd_unregister))
+    app.add_handler(CommandHandler("today", cmd_today))
+    app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
+    app.add_handler(CommandHandler("dayafter", cmd_day_after))
+    app.add_handler(CommandHandler("in3days", cmd_3days))
+    app.add_handler(CommandHandler("yesterday", cmd_yesterday))
+    app.add_handler(CommandHandler("date", cmd_specific))
 
     scheduler = AsyncIOScheduler(timezone=KST)
     scheduler.add_job(

@@ -6,10 +6,11 @@ import pytz
 KST = pytz.timezone("Asia/Seoul")
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
-MY_NOTION_USER_ID = os.environ["MY_NOTION_USER_ID"]
 
 notion = AsyncClient(auth=NOTION_TOKEN)
 
+
+# ─── 날짜 유틸 ────────────────────────────────────────────────────────
 
 def get_target_date(offset: int = 0) -> date:
     return (datetime.now(KST) + timedelta(days=offset)).date()
@@ -19,6 +20,8 @@ def format_date_korean(d: date) -> str:
     weekdays = ["월", "화", "수", "목", "금", "토", "일"]
     return f"{d.month}월 {d.day}일 ({weekdays[d.weekday()]})"
 
+
+# ─── 속성 추출 ────────────────────────────────────────────────────────
 
 def extract_text(prop) -> str:
     if not prop:
@@ -36,10 +39,13 @@ def extract_text(prop) -> str:
     return ""
 
 
-def extract_people(prop) -> list[str]:
+def extract_people(prop) -> list[dict]:
     if not prop:
         return []
-    return [p.get("name", p.get("id", "")) for p in prop.get("people", [])]
+    return [
+        {"id": p.get("id", ""), "name": p.get("name", "")}
+        for p in prop.get("people", [])
+    ]
 
 
 def extract_date_range(prop) -> tuple[str | None, str | None]:
@@ -56,7 +62,6 @@ def parse_datetime_str(s: str | None):
         return None, False
     has_time = "T" in s
     if has_time:
-        # 시간 포함: "2024-01-15T09:00:00.000+09:00"
         try:
             dt = datetime.fromisoformat(s)
             if dt.tzinfo is None:
@@ -72,15 +77,11 @@ def parse_datetime_str(s: str | None):
 
 
 def is_card_on_date(start_str, end_str, target: date) -> bool:
-    """카드가 target 날짜에 해당하는지 확인"""
     start_val, start_has_time = parse_datetime_str(start_str)
     end_val, _ = parse_datetime_str(end_str)
-
     if start_val is None:
         return False
-
     start_date = start_val.date() if start_has_time else start_val
-
     if end_val is None:
         return start_date == target
     else:
@@ -88,47 +89,43 @@ def is_card_on_date(start_str, end_str, target: date) -> bool:
         return start_date <= target <= end_date
 
 
-def is_my_card(props: dict) -> bool:
-    """내가 assignee 또는 cc인 카드인지 확인"""
-    # 노션 DB의 실제 속성명에 맞게 조정 필요
-    assignee_candidates = ["담당자", "Assignee", "assign", "담당", "할당"]
-    cc_candidates = ["CC", "cc", "참조", "관련자"]
+# ─── Notion 유저 검색 ─────────────────────────────────────────────────
 
-    for key in assignee_candidates:
+async def find_notion_user_by_name(name: str) -> dict | None:
+    """
+    워크스페이스 유저 목록에서 이름으로 검색
+    반환: {"id": "...", "name": "..."} 또는 None
+    """
+    try:
+        response = await notion.users.list()
+        users = response.get("results", [])
+        # 정확히 일치하는 이름 우선
+        for user in users:
+            if user.get("name") == name:
+                return {"id": user["id"], "name": user["name"]}
+        # 없으면 포함 검색
+        for user in users:
+            if name in user.get("name", ""):
+                return {"id": user["id"], "name": user["name"]}
+        return None
+    except Exception as e:
+        print(f"[Notion 유저 검색 오류] {e}")
+        return None
+
+
+# ─── 일정 조회 ────────────────────────────────────────────────────────
+
+def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
+    check_keys = ["담당자", "Assignee", "assign", "담당", "할당", "CC", "cc", "참조", "관련자", "사람"]
+    for key in check_keys:
         if key in props:
             people = extract_people(props[key])
-            if MY_NOTION_USER_ID in [p for p in props[key].get("people", []) if p.get("id") == MY_NOTION_USER_ID]:
+            if any(p["id"] == my_notion_user_id for p in people):
                 return True
-            # 이름으로도 체크 (fallback)
-            my_name = os.environ.get("MY_NOTION_NAME", "")
-            if my_name and my_name in people:
-                return True
-
-    for key in cc_candidates:
-        if key in props:
-            my_name = os.environ.get("MY_NOTION_NAME", "")
-            if my_name:
-                people = extract_people(props[key])
-                if my_name in people:
-                    return True
-            # ID로 체크
-            for p in props[key].get("people", []):
-                if p.get("id") == MY_NOTION_USER_ID:
-                    return True
-
     return False
 
 
-async def fetch_schedule(target: date) -> dict:
-    """
-    반환 형태:
-    {
-        "vacation": {"휴가": [...이름], "오전반차": [...이름], "오후반차": [...이름]},
-        "my_cards": [{"title": ..., "time": ..., "category": ...}]
-    }
-    """
-    # 날짜 필터: target 날짜를 포함하는 카드
-    # Notion API는 date 필터로 정확한 범위 쿼리가 제한적이므로 ±7일 범위로 가져와서 Python에서 필터링
+async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     start_range = (target - timedelta(days=7)).isoformat()
     end_range = (target + timedelta(days=1)).isoformat()
 
@@ -138,40 +135,33 @@ async def fetch_schedule(target: date) -> dict:
             filter={
                 "and": [
                     {
-                        "property": "날짜",  # ← 실제 날짜 속성명으로 교체
-                        "date": {
-                            "on_or_after": start_range
-                        }
+                        "property": "날짜",  # ← 실제 속성명으로 교체
+                        "date": {"on_or_after": start_range}
                     },
                     {
-                        "property": "날짜",  # ← 실제 날짜 속성명으로 교체
-                        "date": {
-                            "on_or_before": end_range
-                        }
+                        "property": "날짜",  # ← 실제 속성명으로 교체
+                        "date": {"on_or_before": end_range}
                     }
                 ]
             },
             page_size=100
         )
     except Exception as e:
-        print(f"[Notion API Error] {e}")
+        print(f"[Notion API 오류] {e}")
         return {"vacation": {"휴가": [], "오전반차": [], "오후반차": []}, "my_cards": []}
 
     pages = response.get("results", [])
-
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": []}
     my_cards = []
 
     for page in pages:
         props = page.get("properties", {})
 
-        # 날짜 속성명 탐색 (여러 후보)
         date_prop = None
         for key in ["날짜", "Date", "date", "일정", "기간"]:
             if key in props:
                 date_prop = props[key]
                 break
-
         if date_prop is None:
             continue
 
@@ -179,46 +169,37 @@ async def fetch_schedule(target: date) -> dict:
         if not is_card_on_date(start_str, end_str, target):
             continue
 
-        # 제목
         title = ""
         for key in ["이름", "Name", "name", "제목", "Title"]:
             if key in props:
                 title = extract_text(props[key])
                 break
 
-        # 범주/카테고리
         category = ""
         for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
             if key in props:
                 category = extract_text(props[key])
                 break
 
-        # 휴가 카드 처리
+        # 휴가 카드
         if "휴가" in category:
             assignees = []
             for key in ["담당자", "Assignee", "assign", "담당", "할당", "사람"]:
                 if key in props:
-                    assignees = extract_people(props[key])
+                    assignees = [p["name"] for p in extract_people(props[key])]
                     break
-
             vacation_type = title if title in ["휴가", "오전반차", "오후반차"] else "휴가"
-            if vacation_type in vacation_result:
-                vacation_result[vacation_type].extend(assignees)
-            else:
-                vacation_result["휴가"].extend(assignees)
+            vacation_result[vacation_type].extend(assignees)
 
-        # 내 카드 처리
-        if is_my_card(props):
-            # 시간 추출
+        # 내 카드
+        if _is_my_card(props, my_notion_user_id):
             time_str = None
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)
-
             if start_has_time and start_val:
                 t_start = start_val.strftime("%H:%M")
                 if end_has_time and end_val:
-                    t_end = end_val.strftime("%H:%M")
-                    time_str = f"{t_start} ~ {t_end}"
+                    time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}"
                 else:
                     time_str = t_start
 
@@ -231,11 +212,12 @@ async def fetch_schedule(target: date) -> dict:
     return {"vacation": vacation_result, "my_cards": my_cards}
 
 
+# ─── 메시지 포맷 ──────────────────────────────────────────────────────
+
 def format_schedule_message(target: date, data: dict) -> str:
     date_str = format_date_korean(target)
     lines = [f"📅 *{date_str} 일정*\n"]
 
-    # 휴가 섹션
     vacation = data["vacation"]
     has_vacation = any(vacation.values())
 
@@ -249,7 +231,6 @@ def format_schedule_message(target: date, data: dict) -> str:
             lines.append(f"  🏝 휴가: {', '.join(vacation['휴가'])}")
         lines.append("")
 
-    # 내 일정 섹션
     my_cards = data["my_cards"]
     if my_cards:
         lines.append("📌 *내 일정*")
@@ -261,6 +242,6 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("")
 
     if not has_vacation and not my_cards:
-        lines.append("✅ 오늘은 등록된 일정이 없어요!")
+        lines.append("✅ 등록된 일정이 없어요!")
 
     return "\n".join(lines)

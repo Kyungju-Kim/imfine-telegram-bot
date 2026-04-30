@@ -203,10 +203,17 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 else:
                     time_str = t_start
 
+            # 회의실 예약 추출
+            room = ""
+            for key in ["회의실 예약", "회의실", "장소"]:
+                if key in props:
+                    room = extract_text(props[key])
+                    break
+
             my_cards.append({
                 "title": title,
                 "time": time_str,
-                "category": category
+                "room": room
             })
 
     return {"vacation": vacation_result, "my_cards": my_cards}

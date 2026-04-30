@@ -184,6 +184,7 @@ async def cmd_specific(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("register", cmd_register))
     app.add_handler(CommandHandler("unregister", cmd_unregister))
     app.add_handler(CommandHandler("today", cmd_today))

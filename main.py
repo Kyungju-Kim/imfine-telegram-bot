@@ -16,6 +16,7 @@ from notion_helper import (
     get_target_date, find_notion_user_by_name
 )
 from user_store import register_user, get_user, remove_user, list_users
+from schedule_monitor import check_and_notify
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -107,6 +108,14 @@ async def scheduled_daily(app):
             except Exception:
                 pass
             logger.error(f"[스케줄러] {telegram_id} 발송 실패: {e}")
+
+
+# ─── 모니터: 5분마다 일정 변경 감지 ─────────────────────────────────
+
+async def run_monitor(app):
+    from notion_helper import notion as notion_client
+    users = list_users()
+    await check_and_notify(app, notion_client, os.environ["NOTION_DATABASE_ID"], users)
 
 
 # ─── /start ──────────────────────────────────────────────────────────
@@ -345,8 +354,15 @@ def main():
         args=[app],
         id="daily_schedule"
     )
+    scheduler.add_job(
+        run_monitor,
+        trigger="interval",
+        minutes=5,
+        args=[app],
+        id="schedule_monitor"
+    )
     scheduler.start()
-    logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금)")
+    logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금 / 5분마다 일정 모니터링)")
 
     logger.info("봇 시작!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

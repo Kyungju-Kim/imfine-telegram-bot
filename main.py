@@ -196,6 +196,7 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     finally:
         typing_task.cancel()
+        await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
 
     return ConversationHandler.END
 
@@ -251,6 +252,7 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
         )
     finally:
         typing_task.cancel()
+        await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
 
     return ConversationHandler.END
 
@@ -290,6 +292,7 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         finally:
             typing_task.cancel()
+            await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
     except ValueError:
         await update.message.reply_text(
             "`YYYY-MM-DD` 형식으로 입력해주세요!\n예: `2024-01-15`\n\n다시 시도하려면 `/date`",

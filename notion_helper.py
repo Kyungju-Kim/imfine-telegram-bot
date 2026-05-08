@@ -9,49 +9,6 @@ DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 
 notion = AsyncClient(auth=NOTION_TOKEN)
 
-async def fetch_all_cards_today():
-    """오늘 날짜에 해당하는 모든 카드를 한 번에 가져옴 (Batch Query)"""
-    target_date = get_target_date(0).isoformat()
-    
-    # 오늘 날짜에 걸쳐 있는 모든 일정 검색
-    query_filter = {
-        "property": "날짜",
-        "date": {
-            "on_or_before": target_date,
-            "on_or_after": target_date
-        }
-    }
-    
-    try:
-        response = await notion.databases.query(
-            database_id=DATABASE_ID,
-            filter=query_filter
-        )
-        
-        all_cards = []
-        for page in response.get("results", []):
-            props = page.get("properties", {})
-            
-            # 담당자 목록 추출 (Python 필터링용)
-            assignees = []
-            assignee_prop = props.get("담당자", {}).get("people", [])
-            for person in assignee_prop:
-                assignees.append(person.get("name"))
-            
-            # 공통 데이터 파싱
-            all_cards.append({
-                "id": page["id"],
-                "title": extract_text(props.get("이름")),
-                "room": props.get("회의실", {}).get("select", {}).get("name") if props.get("회의실") else "",
-                "time": extract_time(props.get("날짜")),
-                "edited_time": page["last_edited_time"],
-                "assignees": assignees, # 필터링 기준
-                "category": props.get("구분", {}).get("select", {}).get("name") if props.get("구분") else ""
-            })
-        return all_cards
-    except Exception as e:
-        print(f"Batch fetch error: {e}")
-        return []
 
 # ─── 날짜 유틸 ────────────────────────────────────────────────────────
 

@@ -22,10 +22,10 @@ def format_date_korean(d: date) -> str:
 
 
 def escape_md(text: str) -> str:
-    """텔레그램 Markdown 특수문자 이스케이프"""
+    """텔레그램 Markdown V1 특수문자 이스케이프"""
     if not text:
         return ""
-    for char in ['\\', '_', '*', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+    for char in ['_', '*', '`', '[']:
         text = text.replace(char, f'\\{char}')
     return text
 

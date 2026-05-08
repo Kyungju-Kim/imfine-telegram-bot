@@ -5,14 +5,15 @@ schedule_monitor.py
 """
 
 import logging
-from datetime import datetime, date, time, timedelta
+import asyncio
+from datetime import datetime
 from zoneinfo import ZoneInfo
+from notion_helper import fetch_all_cards_today, fetch_my_cards_today
+from user_store import list_users
 
 logger = logging.getLogger(__name__)
-
 KST = ZoneInfo("Asia/Seoul")
-
-_prev_state: dict[str, dict] = {}
+_prev_state = {}
 
 # 스케줄러 참조 (main.py에서 주입)
 _scheduler = None
@@ -31,6 +32,50 @@ def _is_work_hour() -> bool:
 def _is_weekday() -> bool:
     return datetime.now(KST).weekday() < 5
 
+
+async def run_monitor(app):
+    """전사 일정 통합 모니터링 루프"""
+    now = datetime.now(KST)
+    if not (time(8, 0) <= now.time() <= time(19, 0)) or now.weekday() >= 5:
+        return
+
+    # 1. API 호출 1회로 모든 카드 로드
+    all_cards = await fetch_all_cards_today()
+    users = list_users()
+
+    # 2. 메모리 상에서 유저별 필터링 및 업데이트
+    for telegram_id, user_info in users.items():
+        notion_name = user_info.get("notion_name")
+        user_cards = [c for c in all_cards if notion_name in c["assignees"] and "휴가" not in c["category"]]
+        
+        await _process_user_update(app, str(telegram_id), user_cards)
+
+async def _process_user_update(app, telegram_id, current_cards):
+    global _prev_state
+    
+    # 5분 전 알림 스케줄링 (항상 최신화)
+    for card in current_cards:
+        if card.get("time"):
+            await _register_reminder(app, telegram_id, card)
+
+    prev = _prev_state.get(telegram_id)
+    current_dict = {c["id"]: c for c in current_cards}
+
+    if prev is None:
+        _prev_state[telegram_id] = current_dict
+        return
+
+    # 변경 감지
+    new_ids = set(current_dict.keys()) - set(prev.keys())
+    changed_ids = [cid for cid, c in current_dict.items() 
+                   if cid in prev and c["edited_time"] != prev[cid]["edited_time"]]
+
+    if new_ids or changed_ids:
+        msg = "🔔 *일정이 업데이트됐어요!*"
+        # 간단 요약 메시지 구성 및 전송 로직...
+        await app.bot.send_message(chat_id=int(telegram_id), text=msg, parse_mode="Markdown")
+
+    _prev_state[telegram_id] = current_dict
 
 # ─── 5분 전 알림 ─────────────────────────────────────────────────────
 
@@ -59,20 +104,9 @@ async def _send_reminder(app, telegram_id: str, card: dict):
         logger.error(f"[5분 전 알림 실패] {telegram_id}: {e}")
 
 
-def _register_reminder(app, telegram_id: str, page_id: str, card: dict):
-    """
-    5분 전 알림 job 등록.
-
-    중요:
-    기존 job을 먼저 제거한 뒤 새로 등록한다.
-    그래야 일정 시간이 바뀌거나, 시간 있는 일정이 시간 없는 일정으로 바뀌거나,
-    이미 지난 시간으로 바뀐 경우에도 예전 알림이 남지 않는다.
-    """
-    if not _scheduler:
-        return
-
-    telegram_id = str(telegram_id)
-    job_id = f"reminder_{telegram_id}_{page_id}"
+async def _register_reminder(app, telegram_id, card):
+    """5분 전 알림 등록/갱신 로직 (중복 제거 포함)"""
+    job_id = f"rem_{telegram_id}_{card['id']}"
 
     # 기존 job 먼저 제거
     if _scheduler.get_job(job_id):

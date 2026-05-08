@@ -441,7 +441,7 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
     try:
-        await force_check(
+        current = await refresh_baseline(
             context.application,
             notion_client,
             os.environ["NOTION_DATABASE_ID"],
@@ -449,11 +449,15 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user,
         )
 
-        await loading_msg.delete()
+        from schedule_monitor import _format_remaining_cards
+        body = _format_remaining_cards(current)
+        message = f"📅 *오늘 남은 일정*\n{body}"
+
+        # 새 메시지 보내는 대신 로딩 메시지를 바로 수정
+        await loading_msg.edit_text(message, parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"[/update 실패] {telegram_id}: {e}")
-
         await loading_msg.edit_text(
             "⚠️ 업데이트 중 오류가 발생했어요. 잠시 후 다시 시도해주세요."
         )

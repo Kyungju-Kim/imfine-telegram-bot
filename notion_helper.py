@@ -229,45 +229,41 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
         # 출장/설치/외근 카드
         elif "출장" in category or "설치" in category or "외근" in category:
+        
             assignees = get_assignees()
+        
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)
-
-            if start_has_time and start_val:
-                # 시간 있으면 → 외근
-                t_start = start_val.strftime("%H:%M")
-                if end_has_time and end_val:
-                    time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}"
-                else:
-                    time_str = t_start
-                outside_work.append({
-                    "names": assignees,
-                    "time": time_str,
-                    "time_raw": start_str or ""
-                })
-                # 내가 포함된 외근이면 내 일정에도 추가
-                if _is_my_card(props, my_notion_user_id):
-                    my_cards.append({
-                        "title": title,
-                        "time": time_str,
-                        "date": None,
-                        "room": "",
-                        "is_trip": True
-                    })
-            else:
-                # 날짜 기간 → 출장
-                start_d = start_val.date() if hasattr(start_val, "date") else start_val
-                end_d = end_val.date() if hasattr(end_val, "date") else end_val if end_val else start_d
-                if start_d == end_d:
-                    date_label = format_short_date(start_d)
-                else:
-                    date_label = f"{format_short_date(start_d)} ~ {format_short_date(end_d)}"
+        
+            start_date = (
+                start_val.date()
+                if hasattr(start_val, "date")
+                else start_val
+            )
+        
+            end_date = (
+                end_val.date()
+                if hasattr(end_val, "date")
+                else end_val
+                if end_val
+                else start_date
+            )
+        
+            # 날짜 범위 일정 → 출장
+            # (시간 있어도 출장)
+            if end_date and start_date != end_date:
+        
+                date_label = (
+                    f"{format_short_date(start_date)} ~ "
+                    f"{format_short_date(end_date)}"
+                )
+        
                 business_trip.append({
                     "names": assignees,
                     "date": date_label,
                     "start_raw": start_str or ""
                 })
-                # 내가 포함된 출장이면 내 일정에도 추가
+        
                 if _is_my_card(props, my_notion_user_id):
                     my_cards.append({
                         "title": title,
@@ -276,40 +272,93 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                         "room": "",
                         "is_trip": True
                     })
-
-        # 일반 내 카드 (휴가/출장/설치/외근 제외)
-        if "휴가" not in category and "출장" not in category and "설치" not in category and "외근" not in category:
-            if _is_my_card(props, my_notion_user_id):
-                start_val, start_has_time = parse_datetime_str(start_str)
-                end_val, end_has_time = parse_datetime_str(end_str)
-                time_str = None
-                if start_has_time and start_val:
-                    t_start = start_val.strftime("%H:%M")
-                    if end_has_time and end_val:
-                        time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}"
-                    else:
-                        time_str = t_start
-
-                room = ""
-                for key in ["회의실 예약", "회의실", "장소"]:
-                    if key in props:
-                        room = extract_text(props[key])
-                        break
-
-                my_cards.append({
-                    "title": title,
+        
+            # 같은 날짜 + 시간 있음 → 외근
+            elif start_has_time and start_val:
+        
+                t_start = start_val.strftime("%H:%M")
+        
+                if end_has_time and end_val:
+                    time_str = (
+                        f"{t_start} ~ "
+                        f"{end_val.strftime('%H:%M')}"
+                    )
+                else:
+                    time_str = t_start
+        
+                outside_work.append({
+                    "names": assignees,
                     "time": time_str,
-                    "date": None,
-                    "room": room,
-                    "is_trip": False
+                    "time_raw": start_str or ""
                 })
+        
+                if _is_my_card(props, my_notion_user_id):
+                    my_cards.append({
+                        "title": title,
+                        "time": time_str,
+                        "date": None,
+                        "room": "",
+                        "is_trip": True
+                    })
+        
+            # 같은 날짜 일정
+            else:
+        
+                # 종료 날짜 있으면 → 출장
+                if end_val:
+        
+                    if start_date == end_date:
+                        date_label = format_short_date(start_date)
+                    else:
+                        date_label = (
+                            f"{format_short_date(start_date)} ~ "
+                            f"{format_short_date(end_date)}"
+                        )
+        
+                    business_trip.append({
+                        "names": assignees,
+                        "date": date_label,
+                        "start_raw": start_str or ""
+                    })
+        
+                    if _is_my_card(props, my_notion_user_id):
+                        my_cards.append({
+                            "title": title,
+                            "time": None,
+                            "date": date_label,
+                            "room": "",
+                            "is_trip": True
+                        })
+        
+                # 시작 날짜만 있으면 → 종일 외근
+                else:
+        
+                    outside_work.append({
+                        "names": assignees,
+                        "time": "종일",
+                        "time_raw": start_str or ""
+                    })
+        
+                    if _is_my_card(props, my_notion_user_id):
+                        my_cards.append({
+                            "title": title,
+                            "time": "종일",
+                            "date": None,
+                            "room": "",
+                            "is_trip": True
+                        })
 
     # 정렬
     def my_card_sort_key(x):
+        if x.get("time") == "종일":
+            return "00:00"
+    
         if x.get("time"):
             return x["time"]
+    
         if x.get("date"):
-            return "00:00"  # 날짜만 있는 출장은 맨 앞
+            return "00:00"
+    
         return "99:99"
 
     my_cards.sort(key=my_card_sort_key)

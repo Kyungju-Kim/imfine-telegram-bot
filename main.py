@@ -55,6 +55,8 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
         _user_tasks[telegram_id].cancel()
 
     async def _fetch_and_reply():
+    # 타이핑 인디케이터 표시
+    await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
     try:
         target = get_target_date(offset)
@@ -247,6 +249,7 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         d = date.fromisoformat(update.message.text.strip())
         loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+        await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
         try:
             data = await fetch_schedule(d, user["notion_user_id"])
             message = format_schedule_message(d, data)

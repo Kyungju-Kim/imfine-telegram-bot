@@ -21,6 +21,15 @@ def format_date_korean(d: date) -> str:
     return f"{d.month}월 {d.day}일 ({weekdays[d.weekday()]})"
 
 
+def escape_md(text: str) -> str:
+    """Markdown 특수문자 이스케이프"""
+    if not text:
+        return ""
+    for char in ['_', '*', '`', '[']:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+
 # ─── 속성 추출 ────────────────────────────────────────────────────────
 
 def extract_text(prop) -> str:
@@ -191,7 +200,6 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 category = extract_text(props[key])
                 break
 
-        # 담당자 추출 공통
         def get_assignees():
             for key in ["Assign", "담당자", "Assignee", "담당", "할당", "사람"]:
                 if key in props:
@@ -294,18 +302,18 @@ def format_schedule_message(target: date, data: dict) -> str:
     if has_vacation:
         lines.append("🏖 *휴가/반차*")
         if vacation["휴가"]:
-            lines.append(f"  • 휴가: {', '.join(vacation['휴가'])}")
+            lines.append(f"  • 휴가: {', '.join(escape_md(n) for n in vacation['휴가'])}")
         if vacation["오전반차"]:
-            lines.append(f"  • 오전반차: {', '.join(vacation['오전반차'])}")
+            lines.append(f"  • 오전반차: {', '.join(escape_md(n) for n in vacation['오전반차'])}")
         if vacation["오후반차"]:
-            lines.append(f"  • 오후반차: {', '.join(vacation['오후반차'])}")
+            lines.append(f"  • 오후반차: {', '.join(escape_md(n) for n in vacation['오후반차'])}")
         lines.append("")
 
     business_trip = data.get("business_trip", [])
     if business_trip:
         lines.append("✈️ *출장*")
         for item in business_trip:
-            names = ", ".join(item["names"])
+            names = ", ".join(escape_md(n) for n in item["names"])
             if item["start"] == item["end"]:
                 lines.append(f"  • {item['start']} {names}")
             else:
@@ -316,7 +324,7 @@ def format_schedule_message(target: date, data: dict) -> str:
     if outside_work:
         lines.append("🚗 *외근*")
         for item in outside_work:
-            names = ", ".join(item["names"])
+            names = ", ".join(escape_md(n) for n in item["names"])
             if item["time"]:
                 lines.append(f"  • `{item['time']}` {names}")
             else:
@@ -327,8 +335,8 @@ def format_schedule_message(target: date, data: dict) -> str:
     if my_cards:
         lines.append("📌 *내 일정*")
         for card in my_cards:
-            title = card["title"] or "(제목 없음)"
-            room_part = f"  📍 {card['room']}" if card.get("room") else ""
+            title = escape_md(card["title"] or "(제목 없음)")
+            room_part = f"  📍 {escape_md(card['room'])}" if card.get("room") else ""
             if card["time"]:
                 lines.append(f"  • `{card['time']}` {title}{room_part}")
             else:

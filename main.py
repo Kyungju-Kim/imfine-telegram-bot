@@ -33,17 +33,6 @@ WAITING_NAME_FROM_START = 3
 _user_tasks: dict[int, asyncio.Task] = {}
 
 
-# ─── 타이핑 효과 유지 헬퍼 ───────────────────────────────────────────
-
-async def keep_typing(bot, chat_id):
-    try:
-        while True:
-            await bot.send_chat_action(chat_id=chat_id, action="typing")
-            await asyncio.sleep(4)
-    except asyncio.CancelledError:
-        pass  # 취소 시 조용히 종료
-
-
 # ─── 공통: 일정 조회 및 발송 ─────────────────────────────────────────
 
 async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
@@ -64,7 +53,6 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
 
     async def _fetch_and_reply():
         loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-        typing_task = asyncio.create_task(keep_typing(context.bot, telegram_id))
         try:
             target = get_target_date(offset)
             data = await fetch_schedule(target, user["notion_user_id"])
@@ -85,9 +73,6 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
                 )
             except Exception:
                 pass
-        finally:
-            typing_task.cancel()
-            await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
 
     task = asyncio.create_task(_fetch_and_reply())
     _user_tasks[telegram_id] = task
@@ -182,7 +167,6 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-    typing_task = asyncio.create_task(keep_typing(context.bot, telegram_id))
     try:
         target = get_target_date(0)
         data = await fetch_schedule(target, notion_user["id"])
@@ -194,9 +178,6 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
             "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
             parse_mode="Markdown"
         )
-    finally:
-        typing_task.cancel()
-        await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
 
     return ConversationHandler.END
 
@@ -238,7 +219,6 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-    typing_task = asyncio.create_task(keep_typing(context.bot, telegram_id))
     try:
         target = get_target_date(0)
         data = await fetch_schedule(target, notion_user["id"])
@@ -250,9 +230,6 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
             "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
             parse_mode="Markdown"
         )
-    finally:
-        typing_task.cancel()
-        await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
 
     return ConversationHandler.END
 
@@ -278,7 +255,6 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         d = date.fromisoformat(update.message.text.strip())
         loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-        typing_task = asyncio.create_task(keep_typing(context.bot, telegram_id))
         try:
             data = await fetch_schedule(d, user["notion_user_id"])
             message = format_schedule_message(d, data)
@@ -290,9 +266,6 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• 잠시 후 다시 시도해주세요\n"
                 "• 계속 문제가 생기면 관리자에게 문의해주세요"
             )
-        finally:
-            typing_task.cancel()
-            await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
     except ValueError:
         await update.message.reply_text(
             "`YYYY-MM-DD` 형식으로 입력해주세요!\n예: `2024-01-15`\n\n다시 시도하려면 `/date`",

@@ -107,8 +107,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`/unregister` - 등록 해제\n"
         f"`/today` - 오늘 일정\n"
         f"`/tomorrow` - 내일 일정\n"
-        f"`/dayafter` - 모레 일정\n"
-        f"`/in3days` - 3일 후 일정\n"
         f"`/yesterday` - 어제 일정\n"
         f"`/date` - 특정 날짜 일정\n"
         f"`/cancel` - 진행 중인 명령 취소",
@@ -255,12 +253,6 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_schedule(update, context, offset=1)
 
-async def cmd_day_after(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_schedule(update, context, offset=2)
-
-async def cmd_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_schedule(update, context, offset=3)
-
 async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_schedule(update, context, offset=-1)
 
@@ -303,8 +295,6 @@ def main():
     app.add_handler(CommandHandler("unregister", cmd_unregister))
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
-    app.add_handler(CommandHandler("dayafter", cmd_day_after))
-    app.add_handler(CommandHandler("in3days", cmd_3days))
     app.add_handler(CommandHandler("yesterday", cmd_yesterday))
 
     scheduler = AsyncIOScheduler(timezone=KST)

@@ -357,7 +357,7 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("")
     else:
         lines.append("📌 *내 일정*")
-        lines.append("  • 오늘은 내 일정이 없어요!")
+        lines.append("  • 등록된 일정이 없어요!")
         lines.append("")
 
     return "\n".join(lines)

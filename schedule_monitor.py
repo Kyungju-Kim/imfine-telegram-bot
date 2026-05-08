@@ -1,6 +1,6 @@
 """
 schedule_monitor.py
-5분마다 오늘 내 일정을 폴링해서 추가/변경 감지 후 텔레그램 알림
+3분마다 오늘 내 일정을 폴링해서 추가/변경 감지 후 텔레그램 알림
 """
 
 import logging
@@ -147,7 +147,7 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
     return result
 
 
-def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
+def _format_remaining_cards(cards: dict) -> str:
     from notion_helper import escape_md
 
     now = datetime.now(KST)
@@ -157,12 +157,12 @@ def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
     no_time = []
 
     for page_id, card in cards.items():
-    if card.get("time"):
-        card_time = card["time"].split(" ~ ")[0]
-        if card_time >= now_str:
-            remaining.append((page_id, card))
-    else:
-        no_time.append((page_id, card))
+        if card.get("time"):
+            card_time = card["time"].split(" ~ ")[0]
+            if card_time >= now_str:
+                remaining.append((page_id, card))
+        else:
+            no_time.append((page_id, card))
 
     remaining.sort(key=lambda x: x[1]["start_raw"])
 
@@ -171,7 +171,7 @@ def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
         title = escape_md(card["title"] or "(제목 없음)")
         room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
 
-       if card.get("time"):
+        if card.get("time"):
             lines.append(f"  • `{card['time']}` {title}{room_part}")
         elif card.get("date"):
             lines.append(f"  • {card['date']} {title}")
@@ -223,7 +223,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             else:
                 header = "🔔 *일정이 업데이트됐어요!*"
 
-            body = _format_remaining_cards(current, new_ids, changed_ids)
+            body = _format_remaining_cards(current)
             message = f"{header}\n\n📅 *오늘 남은 일정*\n{body}"
 
             await app.bot.send_message(
@@ -241,24 +241,12 @@ async def force_check(app, notion_client, database_id: str, telegram_id: str, us
     try:
         current = await fetch_my_cards_today(notion_client, database_id, user_info["notion_user_id"])
 
-        # 이전 상태와 비교해서 배지 계산
-        prev = _prev_state.get(telegram_id, {})
-        new_ids = set()
-        changed_ids = set()
-
-        for page_id, card in current.items():
-            if page_id not in prev:
-                new_ids.add(page_id)
-            elif prev[page_id]["edited_time"] != card["edited_time"]:
-                changed_ids.add(page_id)
-
-        # 상태 업데이트
         _prev_state[telegram_id] = {
             pid: {"edited_time": c["edited_time"]}
             for pid, c in current.items()
         }
 
-        body = _format_remaining_cards(current, new_ids, changed_ids)
+        body = _format_remaining_cards(current)
         message = f"📅 *오늘 남은 일정*\n{body}"
 
         await app.bot.send_message(

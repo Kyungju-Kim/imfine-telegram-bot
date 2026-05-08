@@ -6,7 +6,7 @@ schedule_monitor.py
 
 import logging
 import os
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -43,32 +43,88 @@ def _is_weekday() -> bool:
 
 # ─── 5분 전 알림 ─────────────────────────────────────────────────────
 
-async def _send_reminder(app, telegram_id: str, card: dict):
-    """5분 전 알림 발송"""
-    from notion_helper import escape_md
-
-    title = escape_md(card["title"] or "(제목 없음)")
-    room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
-    time_part = f"`{card['time']}`" if card.get("time") else ""
-
-    message = (
-        f"⏰ *5분 후 일정이 있어요!*\n"
-        f"  • {time_part} {title}{room_part}"
-    )
+async def _send_reminder(
+    app,
+    notion_client,
+    database_id: str,
+    telegram_id: str,
+    notion_user_id: str,
+    page_id: str,
+):
+    from notion_helper import escape_md, parse_datetime_str
 
     try:
+        # 최신 상태 재조회
+        current = await fetch_my_cards_today(
+            notion_client,
+            database_id,
+            notion_user_id,
+        )
+
+        # 삭제됐으면 skip
+        if page_id not in current:
+            logger.info(f"[리마인더 skip] 삭제된 일정 {page_id}")
+            return
+
+        card = current[page_id]
+
+        # 시간 없는 일정이면 skip
+        if not card.get("time"):
+            logger.info(f"[리마인더 skip] 시간 없는 일정 {page_id}")
+            return
+
+        start_val, start_has_time = parse_datetime_str(card["start_raw"])
+
+        if not start_has_time or not start_val:
+            return
+
+        now = datetime.now(KST)
+
+        # 현재 시각 기준
+        # 시작 전 6분 이내일 때만 발송
+        # (polling 지연 허용)
+        diff = (start_val - now).total_seconds()
+
+        if diff <= 0 or diff > 360:
+            logger.info(
+                f"[리마인더 skip] 유효하지 않은 reminder"
+                f"(remaining={diff:.0f}s)"
+            )
+            return
+
+        title = escape_md(card["title"] or "(제목 없음)")
+        room_part = (
+            f" 📍 {escape_md(card['room'])}"
+            if card.get("room")
+            else ""
+        )
+
+        message = (
+            f"⏰ *5분 후 일정이 있어요!*\n"
+            f"  • `{card['time']}` {title}{room_part}"
+        )
+
         await app.bot.send_message(
             chat_id=int(telegram_id),
             text=message,
             parse_mode="Markdown"
         )
+
         logger.info(f"[5분 전 알림] {telegram_id} - {card['title']}")
 
     except Exception as e:
         logger.error(f"[5분 전 알림 실패] {telegram_id}: {e}")
 
 
-def _register_reminder(app, telegram_id: str, page_id: str, card: dict):
+def _register_reminder(
+    app,
+    notion_client,
+    database_id: str,
+    telegram_id: str,
+    notion_user_id: str,
+    page_id: str,
+    card: dict,
+):
     """
     5분 전 알림 job 등록.
 
@@ -109,24 +165,40 @@ def _register_reminder(app, telegram_id: str, page_id: str, card: dict):
             logger.info(
                 f"[늦은 리마인더 즉시 발송] {telegram_id} - {card['title']}"
             )
-
+    
             _scheduler.add_job(
                 _send_reminder,
                 trigger="date",
                 run_date=now + timedelta(seconds=1),
-                args=[app, telegram_id, card],
+                args=[
+                    app,
+                    notion_client,
+                    database_id,
+                    telegram_id,
+                    notion_user_id,
+                    page_id,
+                ],
                 id=job_id,
+                replace_existing=True,
                 timezone=KST
             )
-
+    
         return
 
     _scheduler.add_job(
         _send_reminder,
         trigger="date",
         run_date=notify_at,
-        args=[app, telegram_id, card],
+        args=[
+            app,
+            notion_client,
+            database_id,
+            telegram_id,
+            notion_user_id,
+            page_id,
+        ],
         id=job_id,
+        replace_existing=True,
         timezone=KST
     )
 
@@ -148,12 +220,27 @@ def _remove_reminder(telegram_id: str, page_id: str):
         logger.info(f"[5분 전 알림 제거] {telegram_id} - {page_id}")
 
 
-def register_all_reminders(app, telegram_id: str, cards: dict):
+def register_all_reminders(
+    app,
+    notion_client,
+    database_id: str,
+    telegram_id: str,
+    notion_user_id: str,
+    cards: dict,
+):
     """오늘 카드 전체에 대해 5분 전 알림 등록"""
     telegram_id = str(telegram_id)
 
     for page_id, card in cards.items():
-        _register_reminder(app, telegram_id, page_id, card)
+        _register_reminder(
+            app,
+            notion_client,
+            database_id,
+            telegram_id,
+            notion_user_id,
+            page_id,
+            card,
+        )
 
 
 # ─── Notion 카드 조회 ─────────────────────────────────────────────────
@@ -162,7 +249,6 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
     from notion_helper import (
         extract_date_range,
         extract_text,
-        extract_people,
         parse_datetime_str,
         is_card_on_date,
         format_short_date,
@@ -322,30 +408,39 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
 # ─── 메시지 포맷 ─────────────────────────────────────────────────────
 
 def _format_remaining_cards(cards: dict) -> str:
-    from notion_helper import escape_md
+    from notion_helper import escape_md, parse_datetime_str
 
     now = datetime.now(KST)
-    now_str = now.strftime("%H:%M")
 
     remaining = []
     no_time = []
 
     for page_id, card in cards.items():
         if card.get("time"):
-            card_time = card["time"].split(" ~ ")[0]
+            start_val, _ = parse_datetime_str(card["start_raw"])
 
-            if card_time >= now_str:
+            if start_val and start_val >= now:
                 remaining.append((page_id, card))
         else:
             no_time.append((page_id, card))
 
-    remaining.sort(key=lambda x: x[1]["start_raw"])
+    # datetime 기준 정렬
+    remaining.sort(
+        key=lambda x: (
+            parse_datetime_str(x[1]["start_raw"])[0]
+            or datetime.max.replace(tzinfo=KST)
+        )
+    )
 
     lines = []
 
     for page_id, card in remaining + no_time:
         title = escape_md(card["title"] or "(제목 없음)")
-        room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
+        room_part = (
+            f" 📍 {escape_md(card['room'])}"
+            if card.get("room")
+            else ""
+        )
 
         if card.get("time"):
             lines.append(f"  • `{card['time']}` {title}{room_part}")
@@ -397,7 +492,14 @@ async def refresh_baseline(app, notion_client, database_id: str, telegram_id: st
     _prev_state[telegram_id] = _make_state(current)
 
     # 현재 일정 기준으로 5분 전 알림 다시 등록
-    register_all_reminders(app, telegram_id, current)
+    register_all_reminders(
+        app,
+        notion_client,
+        database_id,
+        telegram_id,
+        user_info["notion_user_id"],
+        current,
+    )
 
     logger.info(
         f"[기준 상태 갱신] {user_info.get('notion_name', telegram_id)} - {len(current)}건"
@@ -430,7 +532,16 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             # 이 시점에는 비교 기준이 없으므로 변경 알림은 보내지 않음
             if prev is None:
                 _prev_state[telegram_id] = _make_state(current)
-                register_all_reminders(app, telegram_id, current)
+            
+                register_all_reminders(
+                    app,
+                    notion_client,
+                    database_id,
+                    telegram_id,
+                    notion_user_id,
+                    current,
+                )
+            
                 continue
 
             new_ids = set()
@@ -449,11 +560,27 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             # 5분 전 알림 갱신
             # 새 일정: 새로 등록
             for page_id in new_ids:
-                _register_reminder(app, telegram_id, page_id, current[page_id])
+                _register_reminder(
+                    app,
+                    notion_client,
+                    database_id,
+                    telegram_id,
+                    notion_user_id,
+                    page_id,
+                    current[page_id],
+                )
 
             # 변경 일정: 기존 job 제거 후 현재 일정 기준으로 재등록
             for page_id in changed_ids:
-                _register_reminder(app, telegram_id, page_id, current[page_id])
+                _register_reminder(
+                    app,
+                    notion_client,
+                    database_id,
+                    telegram_id,
+                    notion_user_id,
+                    page_id,
+                    current[page_id],
+                )
 
             # 삭제 일정: 기존 job 제거
             for page_id in deleted_ids:

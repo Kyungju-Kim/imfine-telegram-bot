@@ -586,13 +586,15 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             for page_id in deleted_ids:
                 _remove_reminder(telegram_id, page_id)
 
-            if not new_ids and not changed_ids:
+            if not new_ids and not changed_ids and not deleted_ids:
                 continue
 
             if new_ids and not changed_ids:
                 header = "🔔 *새 일정이 추가됐어요!*"
             elif changed_ids and not new_ids:
                 header = "🔔 *일정이 변경됐어요!*"
+            elif deleted_ids and not new_ids and not changed_ids:
+                header = "🔔 *일정이 삭제됐어요!*"
             else:
                 header = "🔔 *일정이 업데이트됐어요!*"
 

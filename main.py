@@ -36,9 +36,12 @@ _user_tasks: dict[int, asyncio.Task] = {}
 # ─── 타이핑 효과 유지 헬퍼 ───────────────────────────────────────────
 
 async def keep_typing(bot, chat_id):
-    while True:
-        await bot.send_chat_action(chat_id=chat_id, action="typing")
-        await asyncio.sleep(4)
+    try:
+        while True:
+            await bot.send_chat_action(chat_id=chat_id, action="typing")
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        pass  # 취소 시 조용히 종료
 
 
 # ─── 공통: 일정 조회 및 발송 ─────────────────────────────────────────
@@ -84,6 +87,7 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
                 pass
         finally:
             typing_task.cancel()
+            await asyncio.gather(typing_task, return_exceptions=True)  # 완전히 종료될 때까지 대기
 
     task = asyncio.create_task(_fetch_and_reply())
     _user_tasks[telegram_id] = task

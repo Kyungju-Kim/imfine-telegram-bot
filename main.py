@@ -437,6 +437,7 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     from notion_helper import notion as notion_client
+    from schedule_monitor import refresh_baseline, _format_remaining_cards
 
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 

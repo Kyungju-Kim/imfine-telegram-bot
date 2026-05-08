@@ -368,22 +368,51 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
         time_str = None
         date_label = None
 
+        # 시간 있는 일정
         if start_has_time and start_val:
-            t_start = start_val.strftime("%H:%M")
 
+            # 종료 시간도 있는 경우
             if end_has_time and end_val:
-                time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}"
-            else:
-                time_str = t_start
 
+                # 같은 날짜
+                if start_val.date() == end_val.date():
+                    time_str = (
+                        f"{start_val.strftime('%H:%M')} ~ "
+                        f"{end_val.strftime('%H:%M')}"
+                    )
+
+                # 날짜 넘어가는 일정
+                else:
+                    time_str = (
+                        f"{start_val.strftime('%m/%d %H:%M')} ~ "
+                        f"{end_val.strftime('%m/%d %H:%M')}"
+                    )
+
+            # 시작 시간만 있는 경우
+            else:
+                time_str = start_val.strftime("%H:%M")
+
+        # 시간 없는 날짜 일정
         elif start_val and end_val:
-            start_d = start_val.date() if hasattr(start_val, "date") else start_val
-            end_d = end_val.date() if hasattr(end_val, "date") else end_val
+            start_d = (
+                start_val.date()
+                if hasattr(start_val, "date")
+                else start_val
+            )
+
+            end_d = (
+                end_val.date()
+                if hasattr(end_val, "date")
+                else end_val
+            )
 
             if start_d == end_d:
                 date_label = format_short_date(start_d)
             else:
-                date_label = f"{format_short_date(start_d)} ~ {format_short_date(end_d)}"
+                date_label = (
+                    f"{format_short_date(start_d)} ~ "
+                    f"{format_short_date(end_d)}"
+                )
 
         room = ""
 

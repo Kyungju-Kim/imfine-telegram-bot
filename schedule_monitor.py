@@ -5,12 +5,18 @@ schedule_monitor.py
 """
 
 import logging
+import os
 from datetime import datetime, date, time, timedelta
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
+
+ALLOW_AFTER_HOURS = (
+    os.getenv("ALLOW_AFTER_HOURS_NOTIFICATIONS", "false").lower()
+    == "true"
+)
 
 _prev_state: dict[str, dict] = {}
 
@@ -24,6 +30,9 @@ def set_scheduler(scheduler):
 
 
 def _is_work_hour() -> bool:
+    if ALLOW_AFTER_HOURS:
+        return True
+
     now = datetime.now(KST)
     return time(8, 0) <= now.time() <= time(19, 0)
 

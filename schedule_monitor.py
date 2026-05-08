@@ -4,15 +4,15 @@ schedule_monitor.py
 """
 
 import logging
-from datetime import datetime, date, time
-import pytz
+from datetime import datetime, date, time, timedelta
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-KST = pytz.timezone("Asia/Seoul")
+KST = ZoneInfo("Asia/Seoul")
 
 # 유저별 이전 카드 상태 저장
-# { telegram_id: { page_id: { "edited_time": ..., "is_new": bool } } }
+# { telegram_id: { page_id: { "edited_time": ... } } }
 _prev_state: dict[str, dict] = {}
 
 
@@ -40,7 +40,6 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
     target = date.today()
     long_range_start = (target - timedelta(days=30)).isoformat()
 
-    from datetime import timedelta
     pages = []
     has_more = True
     next_cursor = None
@@ -149,15 +148,12 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
                 room = extract_text(props[key])
                 break
 
-        # 시작 시각 (정렬용)
-        start_raw = start_str or ""
-
         result[page_id] = {
             "title": title,
             "time": time_str,
             "date": date_label,
             "room": room,
-            "start_raw": start_raw,
+            "start_raw": start_str or "",
             "created_time": page.get("created_time", ""),
             "edited_time": page.get("last_edited_time", ""),
         }
@@ -172,19 +168,17 @@ def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
     now = datetime.now(KST)
     now_str = now.strftime("%H:%M")
 
-    # 시간 있는 카드만 필터링 (현재 시각 이후)
     remaining = []
     no_time = []
 
     for page_id, card in cards.items():
         if card.get("time"):
-            card_time = card["time"].split(" ~ ")[0]  # 시작 시간만
+            card_time = card["time"].split(" ~ ")[0]
             if card_time >= now_str:
                 remaining.append((page_id, card))
         else:
             no_time.append((page_id, card))
 
-    # 시간순 정렬
     remaining.sort(key=lambda x: x[1]["start_raw"])
 
     lines = []
@@ -192,7 +186,6 @@ def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
         title = escape_md(card["title"] or "(제목 없음)")
         room_part = f"  📍 {escape_md(card['room'])}" if card.get("room") else ""
 
-        # 새 카드 / 변경 카드 표시
         badge = ""
         if page_id in new_ids:
             badge = " 🆕"
@@ -245,11 +238,9 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 for pid, c in current.items()
             }
 
-            # 변경사항 없으면 알림 안 보냄
             if not new_ids and not changed_ids:
                 continue
 
-            # 알림 메시지 생성
             if new_ids and not changed_ids:
                 header = "🔔 *새 일정이 추가됐어요!*"
             elif changed_ids and not new_ids:

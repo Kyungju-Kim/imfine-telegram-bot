@@ -356,8 +356,8 @@ def main():
     )
     scheduler.add_job(
         run_monitor,
-        trigger="interval",
-        minutes=5,
+        trigger="cron",
+        minute="0,5,10,15,20,25,30,35,40,45,50,55",
         args=[app],
         id="schedule_monitor"
     )

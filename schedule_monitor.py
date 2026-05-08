@@ -428,8 +428,6 @@ def _format_remaining_cards(cards: dict) -> str:
 
         if card.get("time"):
             lines.append(f"  • `{card['time']}` {title}{room_part}")
-        elif card.get("date"):
-            lines.append(f"  • {card['date']} {title}")
         else:
             lines.append(f"  • {title}{room_part}")
 

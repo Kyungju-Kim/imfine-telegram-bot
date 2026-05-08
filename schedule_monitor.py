@@ -226,7 +226,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             if new_ids and not changed_ids:
                 header = "🔔 *새 일정이 추가됐어요!*"
             elif changed_ids and not new_ids:
-                header = "✏️ *일정이 변경됐어요!*"
+                header = "🔔 *일정이 변경됐어요!*"
             else:
                 header = "🔔 *일정이 업데이트됐어요!*"
 

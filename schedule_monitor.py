@@ -384,8 +384,10 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
                 # 날짜 넘어가는 일정
                 else:
                     time_str = (
-                        f"{start_val.strftime('%m/%d %H:%M')} ~ "
-                        f"{end_val.strftime('%m/%d %H:%M')}"
+                        f"{start_val.month}/{start_val.day} "
+                        f"{start_val.strftime('%H:%M')} ~ "
+                        f"{end_val.month}/{end_val.day} "
+                        f"{end_val.strftime('%H:%M')}"
                     )
 
             # 시작 시간만 있는 경우

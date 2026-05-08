@@ -369,7 +369,7 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("📌 *내 일정*")
         for card in my_cards:
             title = escape_md(card["title"] or "(제목 없음)")
-            room_part = f"  📍 {escape_md(card['room'])}" if card.get("room") else ""
+            room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
             if card.get("time"):
                 lines.append(f"  • `{card['time']}` {title}{room_part}")
             elif card.get("date"):

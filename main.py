@@ -16,7 +16,7 @@ from notion_helper import (
     get_target_date, find_notion_user_by_name
 )
 from user_store import register_user, get_user, remove_user, list_users
-from schedule_monitor import check_and_notify
+from schedule_monitor import check_and_notify, force_check
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -143,7 +143,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`/today` - 오늘 일정\n"
         f"`/tomorrow` - 내일 일정\n"
         f"`/yesterday` - 어제 일정\n"
-        f"`/date` - 특정 날짜 일정",
+        f"`/date` - 특정 날짜 일정\n"
+        f"`/update` - 오늘 남은 내 일정 새로고침",
         parse_mode="Markdown"
     )
     return ConversationHandler.END
@@ -303,6 +304,32 @@ async def cmd_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_schedule(update, context, offset=-1)
 
+async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
+
+    if not user:
+        await update.message.reply_text(
+            "❗ 아직 등록이 안 됐어요!\n`/register` 로 등록해주세요.",
+            parse_mode="Markdown"
+        )
+        return
+
+    from notion_helper import notion as notion_client
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+    try:
+        await force_check(
+            context.application,
+            notion_client,
+            os.environ["NOTION_DATABASE_ID"],
+            str(telegram_id),
+            user
+        )
+        await loading_msg.delete()
+    except Exception as e:
+        logger.error(f"[/update 실패] {telegram_id}: {e}")
+        await loading_msg.edit_text("⚠️ 업데이트 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.")
+
 
 # ─── 메인 ────────────────────────────────────────────────────────────
 
@@ -343,6 +370,7 @@ def main():
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
     app.add_handler(CommandHandler("yesterday", cmd_yesterday))
+    app.add_handler(CommandHandler("update", cmd_update))
 
     scheduler = AsyncIOScheduler(timezone=KST)
     scheduler.add_job(

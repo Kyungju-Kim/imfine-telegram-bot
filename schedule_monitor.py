@@ -171,19 +171,12 @@ def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
         title = escape_md(card["title"] or "(제목 없음)")
         room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
 
-        # 배지를 타이틀 앞에
-        badge = ""
-        if page_id in new_ids:
-            badge = "🆕 "
-        elif page_id in changed_ids:
-            badge = "✏️ "
-
-        if card.get("time"):
-            lines.append(f"  • `{card['time']}` {badge}{title}{room_part}")
+       if card.get("time"):
+            lines.append(f"  • `{card['time']}` {title}{room_part}")
         elif card.get("date"):
-            lines.append(f"  • {card['date']} {badge}{title}")
+            lines.append(f"  • {card['date']} {title}")
         else:
-            lines.append(f"  • {badge}{title}{room_part}")
+            lines.append(f"  • {title}{room_part}")
 
     return "\n".join(lines) if lines else "  • 남은 일정이 없어요!"
 

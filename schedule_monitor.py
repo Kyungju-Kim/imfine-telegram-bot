@@ -102,8 +102,23 @@ def _register_reminder(app, telegram_id: str, page_id: str, card: dict):
     notify_at = start_val - timedelta(minutes=5)
     now = datetime.now(KST)
 
-    # 이미 지난 시각이면 등록 안 함
+    # 이미 5분 전 시각이 지났지만
+    # 일정 시작 전이면 즉시 알림 발송
     if notify_at <= now:
+        if now < start_val:
+            logger.info(
+                f"[늦은 리마인더 즉시 발송] {telegram_id} - {card['title']}"
+            )
+
+            _scheduler.add_job(
+                _send_reminder,
+                trigger="date",
+                run_date=now + timedelta(seconds=1),
+                args=[app, telegram_id, card],
+                id=job_id,
+                timezone=KST
+            )
+
         return
 
     _scheduler.add_job(

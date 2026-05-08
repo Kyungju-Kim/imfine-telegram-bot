@@ -58,23 +58,21 @@ def _save(data: dict):
 
 # ─── Sheets 동기화 ───────────────────────────────────────────────────
 
-def _sheets_save_all(data: dict):
-    """로컬 데이터 전체를 Sheets에 덮어쓰기"""
+def _sheets_upsert_row(telegram_id: str, notion_user_id: str, notion_name: str):
+    """Sheets에서 해당 유저 행만 추가 또는 수정"""
     sheet = _get_sheet()
     if not sheet:
         return
     try:
-        sheet.clear()
-        sheet.append_row(["telegram_id", "notion_user_id", "notion_name"])
-        for telegram_id, info in data.items():
-            sheet.append_row([
-                telegram_id,
-                info["notion_user_id"],
-                info["notion_name"]
-            ])
-        logger.info(f"[Sheets] 전체 저장 완료 ({len(data)}명)")
+        cell = sheet.find(str(telegram_id))
+        if cell:
+            sheet.update(f"A{cell.row}:C{cell.row}", [[telegram_id, notion_user_id, notion_name]])
+            logger.info(f"[Sheets] {notion_name} 업데이트 완료")
+        else:
+            sheet.append_row([telegram_id, notion_user_id, notion_name])
+            logger.info(f"[Sheets] {notion_name} 추가 완료")
     except Exception as e:
-        logger.error(f"[Sheets] 저장 실패: {e}")
+        logger.error(f"[Sheets] upsert 실패: {e}")
 
 
 def _sheets_delete_row(telegram_id: str):
@@ -132,7 +130,7 @@ def register_user(telegram_id: int, notion_user_id: str, notion_name: str):
         "notion_name": notion_name,
     }
     _save(data)
-    _sheets_save_all(data)
+    _sheets_upsert_row(str(telegram_id), notion_user_id, notion_name)
 
 
 def get_user(telegram_id: int) -> dict | None:

@@ -139,7 +139,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📢 매일 오전 8시(월~금)에 오늘 일정을 자동으로 알려드려요!\n\n"
         f"*사용법*\n"
         f"`/register` - 노션 이름으로 등록\n"
-        f"`/unregister` - 등록 해제\n"
         f"`/today` - 오늘 일정\n"
         f"`/tomorrow` - 내일 일정\n"
         f"`/yesterday` - 어제 일정\n"
@@ -286,15 +285,6 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 기타 커맨드 ─────────────────────────────────────────────────────
 
-async def cmd_unregister(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    telegram_id = update.effective_chat.id
-    user = get_user(telegram_id)
-    if not user:
-        await update.message.reply_text("등록된 정보가 없어요!")
-        return
-    remove_user(telegram_id)
-    await update.message.reply_text(f"✅ *{user['notion_name']}* 등록 해제 완료!", parse_mode="Markdown")
-
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_schedule(update, context, offset=0)
 
@@ -366,7 +356,6 @@ def main():
     app.add_handler(start_handler)
     app.add_handler(register_handler)
     app.add_handler(date_handler)
-    app.add_handler(CommandHandler("unregister", cmd_unregister))
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
     app.add_handler(CommandHandler("yesterday", cmd_yesterday))

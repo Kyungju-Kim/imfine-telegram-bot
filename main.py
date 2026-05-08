@@ -26,12 +26,10 @@ logger = logging.getLogger(__name__)
 KST = pytz.timezone("Asia/Seoul")
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-# ConversationHandler 상태
 WAITING_NAME = 1
 WAITING_DATE = 2
 WAITING_NAME_FROM_START = 3
 
-# 유저별 진행 중인 task 관리 (중복 요청 취소용)
 _user_tasks: dict[int, asyncio.Task] = {}
 
 
@@ -50,33 +48,25 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
         )
         return
 
-    # 이전 요청 취소
     if telegram_id in _user_tasks and not _user_tasks[telegram_id].done():
         _user_tasks[telegram_id].cancel()
 
     async def _fetch_and_reply():
-        await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
-        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
         try:
+            await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
             target = get_target_date(offset)
             data = await fetch_schedule(target, user["notion_user_id"])
             message = format_schedule_message(target, data)
-            await loading_msg.edit_text(message, parse_mode="Markdown")
+            await update.message.reply_text(message, parse_mode="Markdown")
         except asyncio.CancelledError:
-            try:
-                await loading_msg.delete()
-            except Exception:
-                pass
+            pass
         except Exception as e:
             logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
-            try:
-                await loading_msg.edit_text(
-                    "⚠️ 일정을 불러오지 못했어요.\n\n"
-                    "• 잠시 후 다시 시도해주세요\n"
-                    "• 계속 문제가 생기면 관리자에게 문의해주세요"
-                )
-            except Exception:
-                pass
+            await update.message.reply_text(
+                "⚠️ 일정을 불러오지 못했어요.\n\n"
+                "• 잠시 후 다시 시도해주세요\n"
+                "• 계속 문제가 생기면 관리자에게 문의해주세요"
+            )
 
     task = asyncio.create_task(_fetch_and_reply())
     _user_tasks[telegram_id] = task
@@ -149,7 +139,6 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     telegram_id = update.effective_chat.id
 
     await update.message.reply_text(f"🔍 노션에서 *{name}* 찾는 중...", parse_mode="Markdown")
-
     notion_user = await find_notion_user_by_name(name)
 
     if not notion_user:
@@ -171,15 +160,15 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
     try:
+        await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
         target = get_target_date(0)
         data = await fetch_schedule(target, notion_user["id"])
         message = format_schedule_message(target, data)
-        await loading_msg.edit_text(message, parse_mode="Markdown")
+        await update.message.reply_text(message, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"[등록 후 일정 조회 실패] {e}")
-        await loading_msg.edit_text(
+        await update.message.reply_text(
             "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
             parse_mode="Markdown"
         )
@@ -202,7 +191,6 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     telegram_id = update.effective_chat.id
 
     await update.message.reply_text(f"🔍 노션에서 *{name}* 찾는 중...", parse_mode="Markdown")
-
     notion_user = await find_notion_user_by_name(name)
 
     if not notion_user:
@@ -224,15 +212,15 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     )
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
     try:
+        await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
         target = get_target_date(0)
         data = await fetch_schedule(target, notion_user["id"])
         message = format_schedule_message(target, data)
-        await loading_msg.edit_text(message, parse_mode="Markdown")
+        await update.message.reply_text(message, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"[등록 후 일정 조회 실패] {e}")
-        await loading_msg.edit_text(
+        await update.message.reply_text(
             "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
             parse_mode="Markdown"
         )
@@ -261,14 +249,13 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         d = date.fromisoformat(update.message.text.strip())
         await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
-        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
         try:
             data = await fetch_schedule(d, user["notion_user_id"])
             message = format_schedule_message(d, data)
-            await loading_msg.edit_text(message, parse_mode="Markdown")
+            await update.message.reply_text(message, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
-            await loading_msg.edit_text(
+            await update.message.reply_text(
                 "⚠️ 일정을 불러오지 못했어요.\n\n"
                 "• 잠시 후 다시 시도해주세요\n"
                 "• 계속 문제가 생기면 관리자에게 문의해주세요"

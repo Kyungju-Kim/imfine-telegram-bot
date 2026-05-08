@@ -324,7 +324,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 header = "🔔 *일정이 업데이트됐어요!*"
 
             body = _format_remaining_cards(current)
-            message = f"{header}\n\n📅 *오늘 남은 일정*\n\n{body}"
+            message = f"{header}\n\n📅 *오늘 남은 일정*\n{body}"
 
             await app.bot.send_message(
                 chat_id=int(telegram_id),
@@ -350,7 +350,7 @@ async def force_check(app, notion_client, database_id: str, telegram_id: str, us
         register_all_reminders(app, telegram_id, current)
 
         body = _format_remaining_cards(current)
-        message = f"📅 *오늘 남은 일정*\n\n{body}"
+        message = f"📅 *오늘 남은 일정*\n{body}"
 
         await app.bot.send_message(
             chat_id=int(telegram_id),

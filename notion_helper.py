@@ -331,28 +331,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
 def format_schedule_message(target: date, data: dict) -> str:
     date_str = format_date_korean(target)
-
-    # 요약 계산
-    vacation_count = sum(len(v) for v in data["vacation"].values())
-    trip_count = len(data.get("business_trip", []))
-    outside_count = len(data.get("outside_work", []))
-    my_count = len(data["my_cards"])
-
-    summary_parts = []
-    if vacation_count:
-        summary_parts.append(f"휴가 {vacation_count}명")
-    if trip_count:
-        summary_parts.append(f"출장 {trip_count}건")
-    if outside_count:
-        summary_parts.append(f"외근 {outside_count}건")
-    if my_count:
-        summary_parts.append(f"내 일정 {my_count}건")
-
-    summary = " · ".join(summary_parts) if summary_parts else "일정 없음"
-    lines = [
-        f"📅 *{date_str} 일정*",
-        f"_{summary}_\n"
-    ]
+    lines = [f"📅 *{date_str} 일정*\n"]
 
     vacation = data["vacation"]
     has_vacation = any(vacation.values())

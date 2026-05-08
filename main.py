@@ -260,6 +260,8 @@ async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── 메인 ────────────────────────────────────────────────────────────
 
 def main():
+    from user_store import restore_from_sheets
+    restore_from_sheets()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # /start 대화 핸들러 (미등록 시 이름 입력 플로우)

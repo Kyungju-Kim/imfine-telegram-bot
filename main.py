@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from datetime import date
 
 import pytz
@@ -30,6 +31,9 @@ WAITING_NAME = 1
 WAITING_DATE = 2
 WAITING_NAME_FROM_START = 3
 
+# 유저별 진행 중인 task 관리 (중복 요청 취소용)
+_user_tasks: dict[int, asyncio.Task] = {}
+
 
 # ─── 공통: 일정 조회 및 발송 ─────────────────────────────────────────
 
@@ -46,15 +50,26 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
         )
         return
 
-    # 로딩 메시지 먼저 전송
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+    # 이전 요청 취소
+    if telegram_id in _user_tasks and not _user_tasks[telegram_id].done():
+        _user_tasks[telegram_id].cancel()
 
-    target = get_target_date(offset)
-    data = await fetch_schedule(target, user["notion_user_id"])
-    message = format_schedule_message(target, data)
+    async def _fetch_and_reply():
+        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+        try:
+            target = get_target_date(offset)
+            data = await fetch_schedule(target, user["notion_user_id"])
+            message = format_schedule_message(target, data)
+            await loading_msg.edit_text(message, parse_mode="Markdown")
+        except asyncio.CancelledError:
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
 
-    # 로딩 메시지를 실제 일정으로 수정
-    await loading_msg.edit_text(message, parse_mode="Markdown")
+    task = asyncio.create_task(_fetch_and_reply())
+    _user_tasks[telegram_id] = task
+
 
 # ─── 스케줄러: 매일 오전 8시 월~금 ───────────────────────────────────
 
@@ -120,7 +135,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/start 후 이름 입력받는 핸들러"""
     name = update.message.text.strip()
     telegram_id = update.effective_chat.id
 
@@ -147,11 +161,11 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    # 등록 후 바로 오늘 일정 발송
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
     target = get_target_date(0)
     data = await fetch_schedule(target, notion_user["id"])
     message = format_schedule_message(target, data)
-    await update.message.reply_text(message, parse_mode="Markdown")
+    await loading_msg.edit_text(message, parse_mode="Markdown")
 
     return ConversationHandler.END
 
@@ -193,11 +207,11 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     )
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    # 등록 후 바로 오늘 일정 발송
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
     target = get_target_date(0)
     data = await fetch_schedule(target, notion_user["id"])
     message = format_schedule_message(target, data)
-    await update.message.reply_text(message, parse_mode="Markdown")
+    await loading_msg.edit_text(message, parse_mode="Markdown")
 
     return ConversationHandler.END
 
@@ -222,9 +236,10 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         d = date.fromisoformat(update.message.text.strip())
+        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
         data = await fetch_schedule(d, user["notion_user_id"])
         message = format_schedule_message(d, data)
-        await update.message.reply_text(message, parse_mode="Markdown")
+        await loading_msg.edit_text(message, parse_mode="Markdown")
     except ValueError:
         await update.message.reply_text(
             "`YYYY-MM-DD` 형식으로 입력해주세요!\n예: `2024-01-15`\n\n다시 시도하려면 `/date`",
@@ -266,9 +281,9 @@ async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     from user_store import restore_from_sheets
     restore_from_sheets()
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # /start 대화 핸들러 (미등록 시 이름 입력 플로우)
     start_handler = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
         states={
@@ -277,7 +292,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    # /register 대화 핸들러
     register_handler = ConversationHandler(
         entry_points=[CommandHandler("register", cmd_register)],
         states={
@@ -286,7 +300,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    # /date 대화 핸들러
     date_handler = ConversationHandler(
         entry_points=[CommandHandler("date", cmd_date)],
         states={

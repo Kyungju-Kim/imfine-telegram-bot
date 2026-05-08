@@ -28,6 +28,7 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 # ConversationHandler 상태
 WAITING_NAME = 1
 WAITING_DATE = 2
+WAITING_NAME_FROM_START = 3
 
 
 # ─── 공통: 일정 조회 및 발송 ─────────────────────────────────────────
@@ -38,8 +39,8 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
 
     if not user:
         await update.message.reply_text(
-            "❗ 아직 등록이 안 됐어!\n"
-            "노션 이름으로 등록해줘:\n"
+            "❗ 아직 등록이 안 됐어요!\n"
+            "노션 이름으로 등록해주세요:\n"
             "`/register`",
             parse_mode="Markdown"
         )
@@ -51,7 +52,7 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
     await update.message.reply_text(message, parse_mode="Markdown")
 
 
-# ─── 스케줄러: 매일 오전 8시 ─────────────────────────────────────────
+# ─── 스케줄러: 매일 오전 8시 월~금 ───────────────────────────────────
 
 async def scheduled_daily(app):
     users = list_users()
@@ -74,7 +75,7 @@ async def scheduled_daily(app):
             try:
                 await app.bot.send_message(
                     chat_id=int(telegram_id),
-                    text="⚠️ 일정 발송 중 오류가 발생했어!\n`/start` 로 상태 확인해줘.",
+                    text="⚠️ 일정 발송 중 오류가 발생했어요!\n`/start` 로 상태 확인해주세요.",
                     parse_mode="Markdown"
                 )
             except Exception:
@@ -90,18 +91,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not user:
         await update.message.reply_text(
-            f"안녕! 전사 일정 봇이야 👋\n\n"
-            f"매일 오전 8시에 오늘 일정을 자동으로 알려줄게!\n\n"
-            f"노션 이름으로 등록하면 바로 사용할 수 있어!\n"
-            f"`/register`",
-            parse_mode="Markdown"
+            "안녕하세요! 전사 일정 봇이에요 👋\n\n"
+            "📢 매일 오전 8시(월~금)에 오늘 일정을 자동으로 알려드려요!\n\n"
+            "노션에 등록된 이름을 알려주시면 바로 등록해드릴게요!\n"
+            "이름을 입력해주세요 😊",
         )
-        return
+        return WAITING_NAME_FROM_START
 
     await update.message.reply_text(
-        f"안녕! 전사 일정 봇이야 👋\n"
+        f"안녕하세요! 전사 일정 봇이에요 👋\n"
         f"상태: ✅ 등록됨: *{user['notion_name']}*\n\n"
-        f"📢 매일 오전 8시에 오늘 일정을 자동으로 알려줄게!\n\n"
+        f"📢 매일 오전 8시(월~금)에 오늘 일정을 자동으로 알려드려요!\n\n"
         f"*사용법*\n"
         f"`/register` - 노션 이름으로 등록\n"
         f"`/unregister` - 등록 해제\n"
@@ -110,16 +110,55 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`/dayafter` - 모레 일정\n"
         f"`/in3days` - 3일 후 일정\n"
         f"`/yesterday` - 어제 일정\n"
-        f"`/date` - 특정 날짜 일정",
+        f"`/date` - 특정 날짜 일정\n"
+        f"`/cancel` - 진행 중인 명령 취소",
         parse_mode="Markdown"
     )
+    return ConversationHandler.END
+
+
+async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/start 후 이름 입력받는 핸들러"""
+    name = update.message.text.strip()
+    telegram_id = update.effective_chat.id
+
+    await update.message.reply_text(f"🔍 노션에서 *{name}* 찾는 중...", parse_mode="Markdown")
+
+    notion_user = await find_notion_user_by_name(name)
+
+    if not notion_user:
+        await update.message.reply_text(
+            f"❌ 노션 워크스페이스에서 *{name}* 을 찾을 수 없어요.\n\n"
+            f"• 노션에 표시되는 정확한 이름인지 확인해주세요\n"
+            f"• 통합(Integration)이 워크스페이스에 초대돼 있는지 확인해주세요\n\n"
+            f"다시 시도하려면 `/register`",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    register_user(telegram_id, notion_user["id"], notion_user["name"])
+    await update.message.reply_text(
+        f"✅ 등록 완료!\n"
+        f"이름: *{notion_user['name']}*\n\n"
+        f"오늘 일정을 바로 불러올게요! 🗓",
+        parse_mode="Markdown"
+    )
+    logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
+
+    # 등록 후 바로 오늘 일정 발송
+    target = get_target_date(0)
+    data = await fetch_schedule(target, notion_user["id"])
+    message = format_schedule_message(target, data)
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+    return ConversationHandler.END
 
 
 # ─── /register 대화 ──────────────────────────────────────────────────
 
 async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "노션에 등록된 이름을 입력해줘!\n예: `홍길동`",
+        "노션에 등록된 이름을 입력해주세요!\n예: `홍길동`",
         parse_mode="Markdown"
     )
     return WAITING_NAME
@@ -135,9 +174,9 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
 
     if not notion_user:
         await update.message.reply_text(
-            f"❌ 노션 워크스페이스에서 *{name}* 을 찾을 수 없어.\n\n"
-            f"• 노션에 표시되는 정확한 이름인지 확인해봐\n"
-            f"• 통합(Integration)이 워크스페이스에 초대돼 있는지 확인해봐\n\n"
+            f"❌ 노션 워크스페이스에서 *{name}* 을 찾을 수 없어요.\n\n"
+            f"• 노션에 표시되는 정확한 이름인지 확인해주세요\n"
+            f"• 통합(Integration)이 워크스페이스에 초대돼 있는지 확인해주세요\n\n"
             f"다시 시도하려면 `/register`",
             parse_mode="Markdown"
         )
@@ -147,10 +186,17 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(
         f"✅ 등록 완료!\n"
         f"이름: *{notion_user['name']}*\n\n"
-        f"이제 `/today` 로 일정 확인해봐!",
+        f"오늘 일정을 바로 불러올게요! 🗓",
         parse_mode="Markdown"
     )
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
+
+    # 등록 후 바로 오늘 일정 발송
+    target = get_target_date(0)
+    data = await fetch_schedule(target, notion_user["id"])
+    message = format_schedule_message(target, data)
+    await update.message.reply_text(message, parse_mode="Markdown")
+
     return ConversationHandler.END
 
 
@@ -158,7 +204,7 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
 
 async def cmd_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "조회할 날짜를 입력해줘!\n예: `2024-01-15`",
+        "조회할 날짜를 입력해주세요!\n예: `2024-01-15`",
         parse_mode="Markdown"
     )
     return WAITING_DATE
@@ -169,7 +215,7 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(telegram_id)
 
     if not user:
-        await update.message.reply_text("먼저 `/register` 로 등록해줘!", parse_mode="Markdown")
+        await update.message.reply_text("먼저 `/register` 로 등록해주세요!", parse_mode="Markdown")
         return ConversationHandler.END
 
     try:
@@ -179,7 +225,7 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(message, parse_mode="Markdown")
     except ValueError:
         await update.message.reply_text(
-            "`YYYY-MM-DD` 형식으로 입력해줘!\n예: `2024-01-15`\n\n다시 시도하려면 `/date`",
+            "`YYYY-MM-DD` 형식으로 입력해주세요!\n예: `2024-01-15`\n\n다시 시도하려면 `/date`",
             parse_mode="Markdown"
         )
     return ConversationHandler.END
@@ -188,7 +234,7 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── 대화 취소 ───────────────────────────────────────────────────────
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("취소했어!")
+    await update.message.reply_text("취소했어요!")
     return ConversationHandler.END
 
 
@@ -198,7 +244,7 @@ async def cmd_unregister(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_chat.id
     user = get_user(telegram_id)
     if not user:
-        await update.message.reply_text("등록된 정보가 없어!")
+        await update.message.reply_text("등록된 정보가 없어요!")
         return
     remove_user(telegram_id)
     await update.message.reply_text(f"✅ *{user['notion_name']}* 등록 해제 완료!", parse_mode="Markdown")
@@ -224,6 +270,15 @@ async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    # /start 대화 핸들러 (미등록 시 이름 입력 플로우)
+    start_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", cmd_start)],
+        states={
+            WAITING_NAME_FROM_START: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_name_received)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
     # /register 대화 핸들러
     register_handler = ConversationHandler(
         entry_points=[CommandHandler("register", cmd_register)],
@@ -242,7 +297,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(start_handler)
     app.add_handler(register_handler)
     app.add_handler(date_handler)
     app.add_handler(CommandHandler("unregister", cmd_unregister))
@@ -256,14 +311,14 @@ def main():
     scheduler.add_job(
         scheduled_daily,
         trigger="cron",
-        day_of_week="mon-fri",  # 월~금만
+        day_of_week="mon-fri",
         hour=8,
         minute=0,
         args=[app],
         id="daily_schedule"
     )
     scheduler.start()
-    logger.info("스케줄러 시작 (매일 오전 8시 KST)")
+    logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금)")
 
     logger.info("봇 시작!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

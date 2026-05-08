@@ -12,26 +12,19 @@ logger = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 
 # 유저별 이전 카드 상태 저장
-# { telegram_id: { page_id: { "edited_time": ... } } }
 _prev_state: dict[str, dict] = {}
 
 
 def _is_work_hour() -> bool:
-    """업무시간(8시~19시) 체크"""
     now = datetime.now(KST)
     return time(8, 0) <= now.time() <= time(19, 0)
 
 
 def _is_weekday() -> bool:
-    """월~금 체크"""
     return datetime.now(KST).weekday() < 5
 
 
 async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_id: str) -> dict:
-    """
-    오늘 날짜 기준 내가 assign/cc된 카드 조회
-    반환: { page_id: { "title", "time", "date", "room", "created_time", "edited_time" } }
-    """
     from notion_helper import (
         extract_date_range, extract_text, extract_people,
         parse_datetime_str, is_card_on_date, format_short_date
@@ -84,7 +77,6 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
         props = page.get("properties", {})
         page_id = page["id"]
 
-        # 내 카드인지 확인
         is_mine = False
         for key in check_keys:
             if key in props:
@@ -95,7 +87,6 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
         if not is_mine:
             continue
 
-        # 날짜 확인
         date_prop = None
         for key in ["기간", "날짜", "Date", "date", "일정"]:
             if key in props:
@@ -108,7 +99,6 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
         if not is_card_on_date(start_str, end_str, target):
             continue
 
-        # 범주 확인 (휴가는 제외)
         category = ""
         for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
             if key in props:
@@ -117,14 +107,12 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
         if "휴가" in category:
             continue
 
-        # 제목
         title = ""
         for key in ["Name", "이름", "name", "제목", "Title"]:
             if key in props:
                 title = extract_text(props[key])
                 break
 
-        # 시간
         start_val, start_has_time = parse_datetime_str(start_str)
         end_val, end_has_time = parse_datetime_str(end_str)
         time_str = None
@@ -141,7 +129,6 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
             end_d = end_val.date() if hasattr(end_val, "date") else end_val
             date_label = format_short_date(start_d) if start_d == end_d else f"{format_short_date(start_d)} ~ {format_short_date(end_d)}"
 
-        # 장소
         room = ""
         for key in ["회의실 예약", "회의실", "장소"]:
             if key in props:
@@ -162,7 +149,6 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
 
 
 def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
-    """현재 시각 이후 남은 카드 목록 포맷"""
     from notion_helper import escape_md
 
     now = datetime.now(KST)
@@ -214,7 +200,6 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
 
             prev = _prev_state.get(telegram_id, None)
 
-            # 첫 실행이면 상태만 저장하고 알림 안 보냄
             if prev is None:
                 _prev_state[telegram_id] = {
                     pid: {"edited_time": c["edited_time"]}
@@ -222,7 +207,6 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 }
                 continue
 
-            # 새 카드 / 변경 카드 감지
             new_ids = set()
             changed_ids = set()
 
@@ -232,7 +216,6 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 elif prev[page_id]["edited_time"] != card["edited_time"]:
                     changed_ids.add(page_id)
 
-            # 상태 업데이트
             _prev_state[telegram_id] = {
                 pid: {"edited_time": c["edited_time"]}
                 for pid, c in current.items()
@@ -260,3 +243,28 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
 
         except Exception as e:
             logger.error(f"[모니터] {telegram_id} 처리 실패: {e}")
+
+
+async def force_check(app, notion_client, database_id: str, telegram_id: str, user_info: dict):
+    """강제 실행: 현재 남은 일정 보여주고 상태 업데이트"""
+    try:
+        current = await fetch_my_cards_today(notion_client, database_id, user_info["notion_user_id"])
+
+        # 상태 업데이트 (다음 폴링부터 정상 감지)
+        _prev_state[telegram_id] = {
+            pid: {"edited_time": c["edited_time"]}
+            for pid, c in current.items()
+        }
+
+        body = _format_remaining_cards(current, set(), set())
+        message = f"📅 *오늘 남은 내 일정*\n{body}"
+
+        await app.bot.send_message(
+            chat_id=int(telegram_id),
+            text=message,
+            parse_mode="Markdown"
+        )
+        logger.info(f"[강제 업데이트] {user_info['notion_name']} 완료")
+    except Exception as e:
+        logger.error(f"[강제 업데이트] {telegram_id}: {e}")
+        raise

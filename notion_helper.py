@@ -134,7 +134,7 @@ def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
 
 
 async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    long_range_start = (target - timedelta(days=60)).isoformat()
+    long_range_start = (target - timedelta(days=30)).isoformat()
 
     pages = []
     has_more = True

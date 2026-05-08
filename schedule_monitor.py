@@ -1,6 +1,7 @@
 """
 schedule_monitor.py
 3분마다 오늘 내 일정을 폴링해서 추가/변경 감지 후 텔레그램 알림
++ 시간이 있는 일정 5분 전 알림
 """
 
 import logging
@@ -13,6 +14,13 @@ KST = ZoneInfo("Asia/Seoul")
 
 _prev_state: dict[str, dict] = {}
 
+# 스케줄러 참조 (main.py에서 주입)
+_scheduler = None
+
+def set_scheduler(scheduler):
+    global _scheduler
+    _scheduler = scheduler
+
 
 def _is_work_hour() -> bool:
     now = datetime.now(KST)
@@ -22,6 +30,82 @@ def _is_work_hour() -> bool:
 def _is_weekday() -> bool:
     return datetime.now(KST).weekday() < 5
 
+
+# ─── 5분 전 알림 ─────────────────────────────────────────────────────
+
+async def _send_reminder(app, telegram_id: str, card: dict):
+    """5분 전 알림 발송"""
+    from notion_helper import escape_md
+    title = escape_md(card["title"] or "(제목 없음)")
+    room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
+    time_part = f"`{card['time']}`" if card.get("time") else ""
+
+    message = (
+        f"⏰ *5분 후 일정이 있어요!*\n\n"
+        f"  • {time_part} {title}{room_part}"
+    )
+    try:
+        await app.bot.send_message(
+            chat_id=int(telegram_id),
+            text=message,
+            parse_mode="Markdown"
+        )
+        logger.info(f"[5분 전 알림] {telegram_id} - {card['title']}")
+    except Exception as e:
+        logger.error(f"[5분 전 알림 실패] {telegram_id}: {e}")
+
+
+def _register_reminder(app, telegram_id: str, page_id: str, card: dict):
+    """5분 전 알림 job 등록"""
+    if not _scheduler or not card.get("time"):
+        return
+
+    from notion_helper import parse_datetime_str
+    start_val, start_has_time = parse_datetime_str(card["start_raw"])
+    if not start_has_time or not start_val:
+        return
+
+    notify_at = start_val - timedelta(minutes=5)
+    now = datetime.now(KST)
+
+    # 이미 지난 시각이면 등록 안 함
+    if notify_at <= now:
+        return
+
+    job_id = f"reminder_{telegram_id}_{page_id}"
+
+    # 기존 job 있으면 제거
+    if _scheduler.get_job(job_id):
+        _scheduler.remove_job(job_id)
+
+    _scheduler.add_job(
+        _send_reminder,
+        trigger="date",
+        run_date=notify_at,
+        args=[app, telegram_id, card],
+        id=job_id,
+        timezone=KST
+    )
+    logger.info(f"[5분 전 알림 등록] {telegram_id} - {card['title']} at {notify_at.strftime('%H:%M')}")
+
+
+def _remove_reminder(telegram_id: str, page_id: str):
+    """5분 전 알림 job 제거"""
+    if not _scheduler:
+        return
+    job_id = f"reminder_{telegram_id}_{page_id}"
+    if _scheduler.get_job(job_id):
+        _scheduler.remove_job(job_id)
+        logger.info(f"[5분 전 알림 제거] {telegram_id} - {page_id}")
+
+
+def register_all_reminders(app, telegram_id: str, cards: dict):
+    """오늘 카드 전체에 대해 5분 전 알림 등록"""
+    for page_id, card in cards.items():
+        _register_reminder(app, telegram_id, page_id, card)
+
+
+# ─── Notion 카드 조회 ─────────────────────────────────────────────────
 
 async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_id: str) -> dict:
     from notion_helper import (
@@ -147,6 +231,8 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
     return result
 
 
+# ─── 메시지 포맷 ─────────────────────────────────────────────────────
+
 def _format_remaining_cards(cards: dict) -> str:
     from notion_helper import escape_md
 
@@ -181,6 +267,8 @@ def _format_remaining_cards(cards: dict) -> str:
     return "\n".join(lines) if lines else "  • 남은 일정이 없어요!"
 
 
+# ─── 폴링: 변경 감지 + 알림 ──────────────────────────────────────────
+
 async def check_and_notify(app, notion_client, database_id: str, users: dict):
     if not _is_work_hour() or not _is_weekday():
         return
@@ -192,15 +280,18 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
 
             prev = _prev_state.get(telegram_id, None)
 
+            # 첫 실행: 상태 저장 + 5분 전 알림 등록
             if prev is None:
                 _prev_state[telegram_id] = {
                     pid: {"edited_time": c["edited_time"]}
                     for pid, c in current.items()
                 }
+                register_all_reminders(app, telegram_id, current)
                 continue
 
             new_ids = set()
             changed_ids = set()
+            deleted_ids = set(prev.keys()) - set(current.keys())
 
             for page_id, card in current.items():
                 if page_id not in prev:
@@ -208,10 +299,19 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 elif prev[page_id]["edited_time"] != card["edited_time"]:
                     changed_ids.add(page_id)
 
+            # 상태 업데이트
             _prev_state[telegram_id] = {
                 pid: {"edited_time": c["edited_time"]}
                 for pid, c in current.items()
             }
+
+            # 5분 전 알림 갱신
+            for page_id in new_ids:
+                _register_reminder(app, telegram_id, page_id, current[page_id])
+            for page_id in changed_ids:
+                _register_reminder(app, telegram_id, page_id, current[page_id])
+            for page_id in deleted_ids:
+                _remove_reminder(telegram_id, page_id)
 
             if not new_ids and not changed_ids:
                 continue
@@ -231,7 +331,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 text=message,
                 parse_mode="Markdown"
             )
-            logger.info(f"[모니터] {user_info['notion_name']} 변경 알림 발송 (새:{len(new_ids)} 변경:{len(changed_ids)})")
+            logger.info(f"[모니터] {user_info['notion_name']} 변경 알림 발송 (새:{len(new_ids)} 변경:{len(changed_ids)} 삭제:{len(deleted_ids)})")
 
         except Exception as e:
             logger.error(f"[모니터] {telegram_id} 처리 실패: {e}")
@@ -245,6 +345,9 @@ async def force_check(app, notion_client, database_id: str, telegram_id: str, us
             pid: {"edited_time": c["edited_time"]}
             for pid, c in current.items()
         }
+
+        # 5분 전 알림도 갱신
+        register_all_reminders(app, telegram_id, current)
 
         body = _format_remaining_cards(current)
         message = f"📅 *오늘 남은 일정*\n{body}"

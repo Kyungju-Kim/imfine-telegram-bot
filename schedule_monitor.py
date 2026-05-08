@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
 
-# 유저별 이전 카드 상태 저장
 _prev_state: dict[str, dict] = {}
 
 
@@ -170,26 +169,26 @@ def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
     lines = []
     for page_id, card in remaining + no_time:
         title = escape_md(card["title"] or "(제목 없음)")
-        room_part = f"  📍 {escape_md(card['room'])}" if card.get("room") else ""
+        room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
 
+        # 배지를 타이틀 앞에
         badge = ""
         if page_id in new_ids:
-            badge = " 🆕"
+            badge = "🆕 "
         elif page_id in changed_ids:
-            badge = " ✏️"
+            badge = "✏️ "
 
         if card.get("time"):
-            lines.append(f"  • `{card['time']}` {title}{room_part}{badge}")
+            lines.append(f"  • `{card['time']}` {badge}{title}{room_part}")
         elif card.get("date"):
-            lines.append(f"  • {card['date']} {title}{badge}")
+            lines.append(f"  • {card['date']} {badge}{title}")
         else:
-            lines.append(f"  • {title}{room_part}{badge}")
+            lines.append(f"  • {badge}{title}{room_part}")
 
     return "\n".join(lines) if lines else "  • 남은 일정이 없어요!"
 
 
 async def check_and_notify(app, notion_client, database_id: str, users: dict):
-    """5분마다 호출: 변경 감지 후 알림"""
     if not _is_work_hour() or not _is_weekday():
         return
 
@@ -276,7 +275,5 @@ async def force_check(app, notion_client, database_id: str, telegram_id: str, us
         )
         logger.info(f"[강제 업데이트] {user_info['notion_name']} 완료")
     except Exception as e:
-        logger.error(f"[강제 업데이트] {telegram_id}: {e}")
-        raise
         logger.error(f"[강제 업데이트] {telegram_id}: {e}")
         raise

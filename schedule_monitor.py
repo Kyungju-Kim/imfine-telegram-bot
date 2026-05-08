@@ -157,12 +157,12 @@ def _format_remaining_cards(cards: dict, new_ids: set, changed_ids: set) -> str:
     no_time = []
 
     for page_id, card in cards.items():
-        if card.get("time"):
-            card_time = card["time"].split(" ~ ")[0]
-            if card_time >= now_str:
-                remaining.append((page_id, card))
-        else:
-            no_time.append((page_id, card))
+    if card.get("time"):
+        card_time = card["time"].split(" ~ ")[0]
+        if card_time >= now_str:
+            remaining.append((page_id, card))
+    else:
+        no_time.append((page_id, card))
 
     remaining.sort(key=lambda x: x[1]["start_raw"])
 

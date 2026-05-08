@@ -13,9 +13,8 @@ logger = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
 
-ALLOW_AFTER_HOURS = (
-    os.getenv("ALLOW_AFTER_HOURS_NOTIFICATIONS", "false").lower()
-    == "true"
+DEBUG_MODE = (
+    os.getenv("DEBUG_MODE", "false").lower() == "true"
 )
 
 _prev_state: dict[str, dict] = {}
@@ -30,13 +29,15 @@ def set_scheduler(scheduler):
 
 
 def _is_work_hour() -> bool:
-    if ALLOW_AFTER_HOURS:
+    if DEBUG_MODE:
         return True
     now = datetime.now(KST)
     return time(8, 0) <= now.time() <= time(19, 0)
 
 
 def _is_weekday() -> bool:
+    if DEBUG_MODE:
+        return True
     return datetime.now(KST).weekday() < 5
 
 

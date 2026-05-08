@@ -137,16 +137,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         await update.message.reply_text(
             "안녕하세요! 전사 일정 봇이에요 👋\n\n"
-            "📢 매일 오전 8시(월~금)에 오늘 일정을 자동으로 알려드려요!\n\n"
-            "노션에 등록된 이름을 알려주시면 바로 등록해드릴게요!\n"
-            "이름을 입력해주세요 😊",
+            "✓ 평일 오전 8시 오늘 일정 안내\n"
+            "✓ 일정 추가/변경 시 실시간 알림\n"
+            "✓ 일정 시작 5분 전 미리 알림\n\n"
+            "노션에 등록된 이름을 입력해주세요 😊",
         )
         return WAITING_NAME_FROM_START
 
     await update.message.reply_text(
         f"안녕하세요! 전사 일정 봇이에요 👋\n"
         f"상태: ✅ 등록됨: *{user['notion_name']}*\n\n"
-        f"📢 매일 오전 8시(월~금)에 오늘 일정을 자동으로 알려드려요!\n\n"
+        f"✓ 평일 오전 8시 오늘 일정 안내\n"
+        f"✓ 일정 추가/변경 시 실시간 알림\n"
+        f"✓ 일정 시작 5분 전 미리 알림\n\n"
         f"*사용법*\n"
         f"`/register` - 노션 이름으로 등록\n"
         f"`/today` - 오늘 일정\n"

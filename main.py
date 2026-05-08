@@ -55,29 +55,28 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
         _user_tasks[telegram_id].cancel()
 
     async def _fetch_and_reply():
-    # 타이핑 인디케이터 표시
-    await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-    try:
-        target = get_target_date(offset)
-        data = await fetch_schedule(target, user["notion_user_id"])
-        message = format_schedule_message(target, data)
-        await loading_msg.edit_text(message, parse_mode="Markdown")
-    except asyncio.CancelledError:
+        await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
+        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
         try:
-            await loading_msg.delete()
-        except Exception:
-            pass
-    except Exception as e:
-        logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
-        try:
-            await loading_msg.edit_text(
-                "⚠️ 일정을 불러오지 못했어요.\n\n"
-                "• 잠시 후 다시 시도해주세요\n"
-                "• 계속 문제가 생기면 관리자에게 문의해주세요"
-            )
-        except Exception:
-            pass
+            target = get_target_date(offset)
+            data = await fetch_schedule(target, user["notion_user_id"])
+            message = format_schedule_message(target, data)
+            await loading_msg.edit_text(message, parse_mode="Markdown")
+        except asyncio.CancelledError:
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
+            try:
+                await loading_msg.edit_text(
+                    "⚠️ 일정을 불러오지 못했어요.\n\n"
+                    "• 잠시 후 다시 시도해주세요\n"
+                    "• 계속 문제가 생기면 관리자에게 문의해주세요"
+                )
+            except Exception:
+                pass
 
     task = asyncio.create_task(_fetch_and_reply())
     _user_tasks[telegram_id] = task
@@ -139,8 +138,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`/today` - 오늘 일정\n"
         f"`/tomorrow` - 내일 일정\n"
         f"`/yesterday` - 어제 일정\n"
-        f"`/date` - 특정 날짜 일정\n"
-        f"`/cancel` - 진행 중인 명령 취소",
+        f"`/date` - 특정 날짜 일정",
         parse_mode="Markdown"
     )
     return ConversationHandler.END
@@ -174,10 +172,17 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-    target = get_target_date(0)
-    data = await fetch_schedule(target, notion_user["id"])
-    message = format_schedule_message(target, data)
-    await loading_msg.edit_text(message, parse_mode="Markdown")
+    try:
+        target = get_target_date(0)
+        data = await fetch_schedule(target, notion_user["id"])
+        message = format_schedule_message(target, data)
+        await loading_msg.edit_text(message, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"[등록 후 일정 조회 실패] {e}")
+        await loading_msg.edit_text(
+            "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
+            parse_mode="Markdown"
+        )
 
     return ConversationHandler.END
 
@@ -220,10 +225,17 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-    target = get_target_date(0)
-    data = await fetch_schedule(target, notion_user["id"])
-    message = format_schedule_message(target, data)
-    await loading_msg.edit_text(message, parse_mode="Markdown")
+    try:
+        target = get_target_date(0)
+        data = await fetch_schedule(target, notion_user["id"])
+        message = format_schedule_message(target, data)
+        await loading_msg.edit_text(message, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"[등록 후 일정 조회 실패] {e}")
+        await loading_msg.edit_text(
+            "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
+            parse_mode="Markdown"
+        )
 
     return ConversationHandler.END
 
@@ -248,8 +260,8 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         d = date.fromisoformat(update.message.text.strip())
-        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
         await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
+        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
         try:
             data = await fetch_schedule(d, user["notion_user_id"])
             message = format_schedule_message(d, data)
@@ -266,13 +278,6 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "`YYYY-MM-DD` 형식으로 입력해주세요!\n예: `2024-01-15`\n\n다시 시도하려면 `/date`",
             parse_mode="Markdown"
         )
-    return ConversationHandler.END
-
-
-# ─── 대화 취소 ───────────────────────────────────────────────────────
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("취소했어요!")
     return ConversationHandler.END
 
 
@@ -310,7 +315,7 @@ def main():
         states={
             WAITING_NAME_FROM_START: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_name_received)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[]
     )
 
     register_handler = ConversationHandler(
@@ -318,7 +323,7 @@ def main():
         states={
             WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_name_received)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[]
     )
 
     date_handler = ConversationHandler(
@@ -326,7 +331,7 @@ def main():
         states={
             WAITING_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, date_received)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[]
     )
 
     app.add_handler(start_handler)

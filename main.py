@@ -15,7 +15,7 @@ from notion_helper import (
     fetch_schedule, format_schedule_message,
     get_target_date, find_notion_user_by_name
 )
-from user_store import register_user, get_user, remove_user, list_users
+from user_store import register_user, get_user, list_users
 from schedule_monitor import check_and_notify, force_check
 
 logging.basicConfig(
@@ -87,6 +87,9 @@ async def scheduled_daily(app):
         logger.warning("[스케줄러] 등록된 유저 없음")
         return
 
+    from schedule_monitor import fetch_my_cards_today, register_all_reminders
+    from notion_helper import notion as notion_client
+
     target = get_target_date(0)
     for telegram_id, user_info in users.items():
         try:
@@ -97,6 +100,13 @@ async def scheduled_daily(app):
                 text=message,
                 parse_mode="Markdown"
             )
+            # 5분 전 알림 등록
+            my_cards = await fetch_my_cards_today(
+                notion_client,
+                os.environ["NOTION_DATABASE_ID"],
+                user_info["notion_user_id"]
+            )
+            register_all_reminders(app, telegram_id, my_cards)
             logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료")
         except Exception as e:
             try:
@@ -110,7 +120,7 @@ async def scheduled_daily(app):
             logger.error(f"[스케줄러] {telegram_id} 발송 실패: {e}")
 
 
-# ─── 모니터: 5분마다 일정 변경 감지 ─────────────────────────────────
+# ─── 모니터: 3분마다 일정 변경 감지 ─────────────────────────────────
 
 async def run_monitor(app):
     from notion_helper import notion as notion_client
@@ -143,7 +153,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`/tomorrow` - 내일 일정\n"
         f"`/yesterday` - 어제 일정\n"
         f"`/date` - 특정 날짜 일정\n"
-        f"`/update` - 오늘 남은 내 일정 새로고침",
+        f"`/update` - 오늘 남은 일정 새로고침",
         parse_mode="Markdown"
     )
     return ConversationHandler.END
@@ -374,13 +384,16 @@ def main():
     scheduler.add_job(
         run_monitor,
         trigger="cron",
-        minute="0,5,10,15,20,25,30,35,40,45,50,55",
+        minute="0,3,6,9,12,15,18,21,24,27,30,33,36,39,42,45,48,51,54,57",
         args=[app],
         id="schedule_monitor"
     )
     scheduler.start()
-    logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금 / 5분마다 일정 모니터링)")
 
+    from schedule_monitor import set_scheduler
+    set_scheduler(scheduler)
+
+    logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금 / 3분마다 일정 모니터링)")
     logger.info("봇 시작!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

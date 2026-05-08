@@ -22,7 +22,6 @@ def format_date_korean(d: date) -> str:
 
 
 def escape_md(text: str) -> str:
-    """Markdown 특수문자 이스케이프"""
     if not text:
         return ""
     for char in ['_', '*', '`', '[']:
@@ -99,7 +98,6 @@ def is_card_on_date(start_str, end_str, target: date) -> bool:
 
 
 def format_short_date(d) -> str:
-    """date 또는 datetime → M/D 형식"""
     if hasattr(d, "date"):
         d = d.date()
     return f"{d.month}/{d.day}"
@@ -136,8 +134,7 @@ def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
 
 
 async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    start_range = target.isoformat()
-    end_range = target.isoformat()
+    long_range_start = (target - timedelta(days=60)).isoformat()
 
     pages = []
     has_more = True
@@ -151,14 +148,14 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                     "or": [
                         {
                             "and": [
-                                {"property": "기간", "date": {"on_or_after": start_range}},
-                                {"property": "기간", "date": {"on_or_before": end_range}}
+                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
+                                {"property": "기간", "date": {"on_or_before": target.isoformat()}}
                             ]
                         },
                         {
                             "and": [
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                                {"property": "기간", "date": {"on_or_after": target.isoformat()}}
+                                {"property": "기간", "date": {"on_or_after": long_range_start}},
+                                {"property": "기간", "date": {"on_or_before": target.isoformat()}}
                             ]
                         }
                     ]
@@ -177,13 +174,11 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             return {
                 "vacation": {"휴가": [], "오전반차": [], "오후반차": []},
                 "business_trip": [],
-                "outside_work": [],
                 "my_cards": []
             }
 
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": []}
     business_trip = []
-    outside_work = []
     my_cards = []
 
     for page in pages:
@@ -230,40 +225,40 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 vacation_type = "휴가"
             vacation_result[vacation_type].extend(assignees)
 
-        # 출장 카드
-        elif "출장" in category:
+        # 출장/설치/외근 카드 통합
+        elif "출장" in category or "설치" in category or "외근" in category:
             assignees = get_assignees()
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)
-            start_label = format_short_date(start_val) if start_val else "?"
-            end_label = format_short_date(end_val) if end_val else start_label
-            business_trip.append({
-                "names": assignees,
-                "start": start_label,
-                "end": end_label,
-                "start_raw": start_str or ""
-            })
 
-        # 외근 카드
-        elif "외근" in category:
-            assignees = get_assignees()
-            start_val, start_has_time = parse_datetime_str(start_str)
-            end_val, end_has_time = parse_datetime_str(end_str)
             time_str = None
+            date_label = None
+
             if start_has_time and start_val:
+                # 시간 있으면 시간 표시
                 t_start = start_val.strftime("%H:%M")
                 if end_has_time and end_val:
                     time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}"
                 else:
                     time_str = t_start
-            outside_work.append({
+            elif start_val and end_val:
+                # 시간 없고 start/end 둘 다 있으면 날짜 표시
+                start_d = start_val.date() if hasattr(start_val, "date") else start_val
+                end_d = end_val.date() if hasattr(end_val, "date") else end_val
+                if start_d == end_d:
+                    date_label = format_short_date(start_d)
+                else:
+                    date_label = f"{format_short_date(start_d)} ~ {format_short_date(end_d)}"
+
+            business_trip.append({
                 "names": assignees,
                 "time": time_str,
-                "time_raw": start_str or ""
+                "date": date_label,
+                "start_raw": start_str or ""
             })
 
-        # 내 카드 (휴가/출장/외근 제외)
-        if "휴가" not in category and "출장" not in category and "외근" not in category:
+        # 내 카드 (휴가/출장/설치/외근 제외)
+        if "휴가" not in category and "출장" not in category and "설치" not in category and "외근" not in category:
             if _is_my_card(props, my_notion_user_id):
                 start_val, start_has_time = parse_datetime_str(start_str)
                 end_val, end_has_time = parse_datetime_str(end_str)
@@ -293,12 +288,10 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     vacation_result["오전반차"].sort()
     vacation_result["오후반차"].sort()
     business_trip.sort(key=lambda x: x["start_raw"])
-    outside_work.sort(key=lambda x: x["time_raw"] if x["time_raw"] else "99:99")
 
     return {
         "vacation": vacation_result,
         "business_trip": business_trip,
-        "outside_work": outside_work,
         "my_cards": my_cards
     }
 
@@ -324,22 +317,13 @@ def format_schedule_message(target: date, data: dict) -> str:
 
     business_trip = data.get("business_trip", [])
     if business_trip:
-        lines.append("✈️ *출장*")
+        lines.append("🗺 *외근/출장*")
         for item in business_trip:
             names = ", ".join(escape_md(n) for n in item["names"])
-            if item["start"] == item["end"]:
-                lines.append(f"  • {item['start']} {names}")
-            else:
-                lines.append(f"  • {item['start']} ~ {item['end']} {names}")
-        lines.append("")
-
-    outside_work = data.get("outside_work", [])
-    if outside_work:
-        lines.append("🚗 *외근*")
-        for item in outside_work:
-            names = ", ".join(escape_md(n) for n in item["names"])
-            if item["time"]:
+            if item.get("time"):
                 lines.append(f"  • `{item['time']}` {names}")
+            elif item.get("date"):
+                lines.append(f"  • {item['date']} {names}")
             else:
                 lines.append(f"  • {names}")
         lines.append("")

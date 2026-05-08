@@ -449,8 +449,6 @@ def format_schedule_message(target: date, data: dict) -> str:
             room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
             if card.get("time"):
                 lines.append(f"  • `{card['time']}` {title}{room_part}")
-            elif card.get("date"):
-                lines.append(f"  • {card['date']} {title}")
             else:
                 lines.append(f"  • {title}{room_part}")
         lines.append("")

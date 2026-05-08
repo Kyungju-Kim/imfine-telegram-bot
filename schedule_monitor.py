@@ -246,17 +246,27 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
 
 
 async def force_check(app, notion_client, database_id: str, telegram_id: str, user_info: dict):
-    """강제 실행: 현재 남은 일정 보여주고 상태 업데이트"""
     try:
         current = await fetch_my_cards_today(notion_client, database_id, user_info["notion_user_id"])
 
-        # 상태 업데이트 (다음 폴링부터 정상 감지)
+        # 이전 상태와 비교해서 배지 계산
+        prev = _prev_state.get(telegram_id, {})
+        new_ids = set()
+        changed_ids = set()
+
+        for page_id, card in current.items():
+            if page_id not in prev:
+                new_ids.add(page_id)
+            elif prev[page_id]["edited_time"] != card["edited_time"]:
+                changed_ids.add(page_id)
+
+        # 상태 업데이트
         _prev_state[telegram_id] = {
             pid: {"edited_time": c["edited_time"]}
             for pid, c in current.items()
         }
 
-        body = _format_remaining_cards(current, set(), set())
+        body = _format_remaining_cards(current, new_ids, changed_ids)
         message = f"📅 *오늘 남은 내 일정*\n{body}"
 
         await app.bot.send_message(
@@ -266,5 +276,7 @@ async def force_check(app, notion_client, database_id: str, telegram_id: str, us
         )
         logger.info(f"[강제 업데이트] {user_info['notion_name']} 완료")
     except Exception as e:
+        logger.error(f"[강제 업데이트] {telegram_id}: {e}")
+        raise
         logger.error(f"[강제 업데이트] {telegram_id}: {e}")
         raise

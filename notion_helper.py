@@ -136,7 +136,8 @@ def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
 
 
 async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    start_range = (target - timedelta(days=60)).isoformat()
+    start_range = target.isoformat()
+    end_range = target.isoformat()
 
     pages = []
     has_more = True
@@ -147,8 +148,20 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             kwargs = {
                 "database_id": DATABASE_ID,
                 "filter": {
-                    "property": "기간",
-                    "date": {"on_or_after": start_range}
+                    "or": [
+                        {
+                            "and": [
+                                {"property": "기간", "date": {"on_or_after": start_range}},
+                                {"property": "기간", "date": {"on_or_before": end_range}}
+                            ]
+                        },
+                        {
+                            "and": [
+                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
+                                {"property": "기간", "date": {"on_or_after": target.isoformat()}}
+                            ]
+                        }
+                    ]
                 },
                 "page_size": 100
             }

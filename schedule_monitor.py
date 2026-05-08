@@ -427,6 +427,7 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
             "date": date_label,
             "room": room,
             "start_raw": start_str or "",
+            "end_raw": end_str or "",
             "created_time": page.get("created_time", ""),
             "edited_time": page.get("last_edited_time", ""),
         }
@@ -446,10 +447,21 @@ def _format_remaining_cards(cards: dict) -> str:
 
     for page_id, card in cards.items():
         if card.get("time"):
-            start_val, _ = parse_datetime_str(card["start_raw"])
 
-            if start_val and start_val >= now:
-                remaining.append((page_id, card))
+            start_val, _ = parse_datetime_str(card["start_raw"])
+            end_val, _ = parse_datetime_str(card.get("end_raw"))
+        
+            # 종료 시간이 있으면:
+            # 아직 안 끝난 일정이면 표시
+            if end_val:
+                if end_val >= now:
+                    remaining.append((page_id, card))
+        
+            # 종료 시간 없으면:
+            # 시작 전 일정만 표시
+            else:
+                if start_val and start_val >= now:
+                    remaining.append((page_id, card))
         else:
             no_time.append((page_id, card))
 
@@ -618,12 +630,15 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             if not new_ids and not changed_ids and not deleted_ids:
                 continue
 
-            if new_ids and not changed_ids:
+            if new_ids and not changed_ids and not deleted_ids:
                 header = "🔔 *새 일정이 추가됐어요!*"
-            elif changed_ids and not new_ids:
+        
+            elif changed_ids and not new_ids and not deleted_ids:
                 header = "🔔 *일정이 변경됐어요!*"
+            
             elif deleted_ids and not new_ids and not changed_ids:
                 header = "🔔 *일정이 삭제됐어요!*"
+            
             else:
                 header = "🔔 *일정이 업데이트됐어요!*"
 

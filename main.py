@@ -46,11 +46,15 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
         )
         return
 
+    # 로딩 메시지 먼저 전송
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+
     target = get_target_date(offset)
     data = await fetch_schedule(target, user["notion_user_id"])
     message = format_schedule_message(target, data)
-    await update.message.reply_text(message, parse_mode="Markdown")
 
+    # 로딩 메시지를 실제 일정으로 수정
+    await loading_msg.edit_text(message, parse_mode="Markdown")
 
 # ─── 스케줄러: 매일 오전 8시 월~금 ───────────────────────────────────
 

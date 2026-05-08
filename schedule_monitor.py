@@ -100,7 +100,7 @@ async def _send_reminder(
         )
 
         message = (
-            f"⏰ *5분 후 일정이 있어요!*\n"
+            f"⏰ *잠시 후 일정이 있어요!*\n"
             f"  • `{card['time']}` {title}{room_part}"
         )
 

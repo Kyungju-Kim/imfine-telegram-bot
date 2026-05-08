@@ -55,17 +55,27 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
         _user_tasks[telegram_id].cancel()
 
     async def _fetch_and_reply():
-        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+    try:
+        target = get_target_date(offset)
+        data = await fetch_schedule(target, user["notion_user_id"])
+        message = format_schedule_message(target, data)
+        await loading_msg.edit_text(message, parse_mode="Markdown")
+    except asyncio.CancelledError:
         try:
-            target = get_target_date(offset)
-            data = await fetch_schedule(target, user["notion_user_id"])
-            message = format_schedule_message(target, data)
-            await loading_msg.edit_text(message, parse_mode="Markdown")
-        except asyncio.CancelledError:
-            try:
-                await loading_msg.delete()
-            except Exception:
-                pass
+            await loading_msg.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
+        try:
+            await loading_msg.edit_text(
+                "⚠️ 일정을 불러오지 못했어요.\n\n"
+                "• 잠시 후 다시 시도해주세요\n"
+                "• 계속 문제가 생기면 관리자에게 문의해주세요"
+            )
+        except Exception:
+            pass
 
     task = asyncio.create_task(_fetch_and_reply())
     _user_tasks[telegram_id] = task
@@ -237,9 +247,17 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         d = date.fromisoformat(update.message.text.strip())
         loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-        data = await fetch_schedule(d, user["notion_user_id"])
-        message = format_schedule_message(d, data)
-        await loading_msg.edit_text(message, parse_mode="Markdown")
+        try:
+            data = await fetch_schedule(d, user["notion_user_id"])
+            message = format_schedule_message(d, data)
+            await loading_msg.edit_text(message, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
+            await loading_msg.edit_text(
+                "⚠️ 일정을 불러오지 못했어요.\n\n"
+                "• 잠시 후 다시 시도해주세요\n"
+                "• 계속 문제가 생기면 관리자에게 문의해주세요"
+            )
     except ValueError:
         await update.message.reply_text(
             "`YYYY-MM-DD` 형식으로 입력해주세요!\n예: `2024-01-15`\n\n다시 시도하려면 `/date`",

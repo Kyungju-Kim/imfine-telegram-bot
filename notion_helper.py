@@ -225,7 +225,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 vacation_type = "휴가"
             vacation_result[vacation_type].extend(assignees)
 
-        # 출장/설치/외근 카드 통합
+        # 출장/설치/외근 카드
         elif "출장" in category or "설치" in category or "외근" in category:
             assignees = get_assignees()
             start_val, start_has_time = parse_datetime_str(start_str)
@@ -235,14 +235,12 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             date_label = None
 
             if start_has_time and start_val:
-                # 시간 있으면 시간 표시
                 t_start = start_val.strftime("%H:%M")
                 if end_has_time and end_val:
                     time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}"
                 else:
                     time_str = t_start
             elif start_val and end_val:
-                # 시간 없고 start/end 둘 다 있으면 날짜 표시
                 start_d = start_val.date() if hasattr(start_val, "date") else start_val
                 end_d = end_val.date() if hasattr(end_val, "date") else end_val
                 if start_d == end_d:
@@ -257,7 +255,17 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 "start_raw": start_str or ""
             })
 
-        # 내 카드 (휴가/출장/설치/외근 제외)
+            # 내가 포함된 외근/출장/설치면 내 일정에도 추가
+            if _is_my_card(props, my_notion_user_id):
+                my_cards.append({
+                    "title": escape_md(title),
+                    "time": time_str,
+                    "date": date_label,
+                    "room": "",
+                    "is_trip": True  # 외근/출장 구분용
+                })
+
+        # 일반 내 카드 (휴가/출장/설치/외근 제외)
         if "휴가" not in category and "출장" not in category and "설치" not in category and "외근" not in category:
             if _is_my_card(props, my_notion_user_id):
                 start_val, start_has_time = parse_datetime_str(start_str)
@@ -279,11 +287,20 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 my_cards.append({
                     "title": title,
                     "time": time_str,
-                    "room": room
+                    "date": None,
+                    "room": room,
+                    "is_trip": False
                 })
 
     # 정렬
-    my_cards.sort(key=lambda x: x["time"] if x["time"] else "99:99")
+    def sort_key(x):
+        if x.get("time"):
+            return x["time"]
+        if x.get("date"):
+            return "00:00"  # 날짜만 있는 건 맨 앞
+        return "99:99"
+
+    my_cards.sort(key=sort_key)
     vacation_result["휴가"].sort()
     vacation_result["오전반차"].sort()
     vacation_result["오후반차"].sort()
@@ -334,8 +351,10 @@ def format_schedule_message(target: date, data: dict) -> str:
         for card in my_cards:
             title = escape_md(card["title"] or "(제목 없음)")
             room_part = f"  📍 {escape_md(card['room'])}" if card.get("room") else ""
-            if card["time"]:
+            if card.get("time"):
                 lines.append(f"  • `{card['time']}` {title}{room_part}")
+            elif card.get("date"):
+                lines.append(f"  • {card['date']} {title}")
             else:
                 lines.append(f"  • {title}{room_part}")
         lines.append("")

@@ -84,17 +84,31 @@ def parse_datetime_str(s: str | None):
             return None, False
 
 
-def is_card_on_date(start_str, end_str, target: date) -> bool:
-    start_val, start_has_time = parse_datetime_str(start_str)
+def is_card_on_date(start_str, end_str, target):
+    from notion_helper import parse_datetime_str
+
+    start_val, _ = parse_datetime_str(start_str)
     end_val, _ = parse_datetime_str(end_str)
-    if start_val is None:
+
+    if not start_val:
         return False
-    start_date = start_val.date() if start_has_time else start_val
-    if end_val is None:
-        return start_date == target
+
+    start_date = (
+        start_val.date()
+        if hasattr(start_val, "date")
+        else start_val
+    )
+
+    if end_val:
+        end_date = (
+            end_val.date()
+            if hasattr(end_val, "date")
+            else end_val
+        )
     else:
-        end_date = end_val.date() if hasattr(end_val, "date") else end_val
-        return start_date <= target <= end_date
+        end_date = start_date
+
+    return start_date <= target <= end_date
 
 
 def format_short_date(d) -> str:

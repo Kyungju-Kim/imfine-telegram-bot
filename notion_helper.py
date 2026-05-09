@@ -424,7 +424,7 @@ def _fmt_card_line(card: dict) -> str:
     title = _card_title_link(card)
     room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
     if card.get("time"):
-        return f"  • `{escape_md(card['time'])}` {title}{room_part}"
+        return f"  • `{card['time']}` {title}{room_part}"
     return f"  • {title}{room_part}"
 
 
@@ -471,7 +471,7 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("🚗 *외근*")
         for item in outside_work:
             names = ", ".join(escape_md(n) for n in item["names"])
-            lines.append(f"  • `{escape_md(item['time'])}` {names}")
+            lines.append(f"  • `{item['time']}` {names}")
         lines.append("")
 
     my_cards = data["my_cards"]

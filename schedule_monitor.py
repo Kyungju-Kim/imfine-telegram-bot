@@ -86,7 +86,7 @@ async def _send_reminder(
 
         message = (
             f"⏰ *잠시 후 일정이 있어요\\!*\n"
-            f"  • `{escape_md(card['time'])}` {title}{room_part}"
+            f"  • `{card['time']}` {title}{room_part}"
         )
 
         await app.bot.send_message(
@@ -359,7 +359,7 @@ def _format_remaining_cards(cards: dict) -> str:
         room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
 
         if card.get("time"):
-            lines.append(f"  • `{escape_md(card['time'])}` {title}{room_part}")
+            lines.append(f"  • `{card['time']}` {title}{room_part}")
         else:
             lines.append(f"  • {title}{room_part}")
 

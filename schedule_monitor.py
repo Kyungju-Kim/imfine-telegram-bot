@@ -454,19 +454,28 @@ async def refresh_baseline(app, notion_client, database_id: str, telegram_id: st
 
     prev = _prev_state.get(telegram_id, {})
 
-    for page_id in prev.keys():
+    # 삭제된 일정 reminder 제거
+    deleted_ids = set(prev.keys()) - set(current.keys())
+    for page_id in deleted_ids:
         _remove_reminder(telegram_id, page_id)
 
-    _prev_state[telegram_id] = _make_state(current)
+    # 새로 추가되거나 변경된 일정만 reminder 재등록
+    for page_id, card in current.items():
+        if (
+            page_id not in prev
+            or prev[page_id]["edited_time"] != card["edited_time"]
+        ):
+            _register_reminder(
+                app,
+                notion_client,
+                database_id,
+                telegram_id,
+                user_info["notion_user_id"],
+                page_id,
+                card,
+            )
 
-    register_all_reminders(
-        app,
-        notion_client,
-        database_id,
-        telegram_id,
-        user_info["notion_user_id"],
-        current,
-    )
+    _prev_state[telegram_id] = _make_state(current)
 
     logger.info(
         f"[기준 상태 갱신] {user_info.get('notion_name', telegram_id)} - {len(current)}건"

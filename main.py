@@ -271,8 +271,8 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         target = get_target_date(0)
-        cards = await fetch_my_schedule(target, notion_user["id"])
-        message = format_my_schedule_message(target, cards)
+        data = await fetch_schedule(target, notion_user["id"])
+        message = format_schedule_message(target, data)
 
         await loading_msg.edit_text(message, parse_mode="MarkdownV2")
 
@@ -348,8 +348,8 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
 
     try:
         target = get_target_date(0)
-        cards = await fetch_my_schedule(target, notion_user["id"])
-        message = format_my_schedule_message(target, cards)
+        data = await fetch_schedule(target, notion_user["id"])
+        message = format_schedule_message(target, data)
 
         await loading_msg.edit_text(message, parse_mode="MarkdownV2")
 

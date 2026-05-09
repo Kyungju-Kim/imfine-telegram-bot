@@ -479,7 +479,14 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, start_name_received)
             ]
         },
-        fallbacks=[],
+        fallbacks=[
+            CommandHandler("start", cmd_start),
+            CommandHandler("today", cmd_today),
+            CommandHandler("tomorrow", cmd_tomorrow),
+            CommandHandler("left", cmd_left),
+            CommandHandler("date", cmd_date),
+            CommandHandler("register", cmd_register),
+        ],
     )
 
     register_handler = ConversationHandler(
@@ -489,7 +496,14 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, register_name_received)
             ]
         },
-        fallbacks=[],
+        fallbacks=[
+            CommandHandler("start", cmd_start),
+            CommandHandler("today", cmd_today),
+            CommandHandler("tomorrow", cmd_tomorrow),
+            CommandHandler("left", cmd_left),
+            CommandHandler("date", cmd_date),
+            CommandHandler("register", cmd_register),
+        ],
     )
 
     date_handler = ConversationHandler(
@@ -499,7 +513,14 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, date_received)
             ]
         },
-        fallbacks=[],
+        fallbacks=[
+            CommandHandler("start", cmd_start),
+            CommandHandler("today", cmd_today),
+            CommandHandler("tomorrow", cmd_tomorrow),
+            CommandHandler("left", cmd_left),
+            CommandHandler("date", cmd_date),
+            CommandHandler("register", cmd_register),
+        ],
     )
 
     app.add_handler(start_handler)
@@ -533,8 +554,12 @@ def main():
     scheduler.start()
 
     from schedule_monitor import set_scheduler
-
     set_scheduler(scheduler)
+
+    async def post_init(app):
+        await run_monitor(app)
+
+    app.post_init = post_init
 
     logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금 / 3분마다 일정 모니터링)")
     logger.info("봇 시작!")

@@ -17,7 +17,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from notion_helper import (
     fetch_schedule,
+    fetch_my_schedule,
     format_schedule_message,
+    format_my_schedule_message,
     get_target_date,
     find_notion_user_by_name,
 )
@@ -40,9 +42,9 @@ WAITING_NAME_FROM_START = 3
 _user_tasks: dict[int, asyncio.Task] = {}
 
 
-# ─── 공통: 일정 조회 및 발송 ─────────────────────────────────────────
+# ─── 공통: 내 일정만 조회 및 발송 (/today, /tomorrow) ────────────────
 
-async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
+async def send_my_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
     telegram_id = update.effective_chat.id
     user = get_user(telegram_id)
 
@@ -63,13 +65,12 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
 
         try:
             target = get_target_date(offset)
-            data = await fetch_schedule(target, user["notion_user_id"])
-            message = format_schedule_message(target, data)
+            cards = await fetch_my_schedule(target, user["notion_user_id"])
+            message = format_my_schedule_message(target, cards)
 
             await loading_msg.edit_text(message, parse_mode="Markdown")
 
-            # /today 로 오늘 일정을 확인한 경우,
-            # 이 시점을 변경 감지 기준 상태로 저장한다.
+            # 오늘 일정 확인 시 기준 상태 갱신
             if offset == 0:
                 from notion_helper import notion as notion_client
                 from schedule_monitor import refresh_baseline
@@ -90,7 +91,6 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
 
         except Exception as e:
             logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
-
             try:
                 await loading_msg.edit_text(
                     "⚠️ 일정을 불러오지 못했어요.\n\n"
@@ -102,6 +102,35 @@ async def send_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
 
     task = asyncio.create_task(_fetch_and_reply())
     _user_tasks[telegram_id] = task
+
+
+# ─── 공통: 전체 일정 조회 및 발송 (/date) ───────────────────────────
+
+async def send_full_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, target: date):
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
+
+    if not user:
+        await update.message.reply_text(
+            "먼저 `/register` 로 등록해주세요!",
+            parse_mode="Markdown",
+        )
+        return
+
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+
+    try:
+        data = await fetch_schedule(target, user["notion_user_id"])
+        message = format_schedule_message(target, data)
+        await loading_msg.edit_text(message, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
+        await loading_msg.edit_text(
+            "⚠️ 일정을 불러오지 못했어요.\n\n"
+            "• 잠시 후 다시 시도해주세요\n"
+            "• 계속 문제가 생기면 관리자에게 문의해주세요"
+        )
 
 
 # ─── 스케줄러: 매일 오전 8시 월~금 ───────────────────────────────────
@@ -131,8 +160,6 @@ async def scheduled_daily(app):
                 parse_mode="Markdown",
             )
 
-            # 오전 8시 오늘 일정 발송 직후,
-            # 이 시점을 변경 감지 기준 상태로 저장한다.
             await refresh_baseline(
                 app,
                 notion_client,
@@ -152,7 +179,6 @@ async def scheduled_daily(app):
                 )
             except Exception:
                 pass
-
             logger.error(f"[스케줄러] {telegram_id} 발송 실패: {e}")
 
 
@@ -195,11 +221,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✓ 일정 시작 5분 전 미리 알림\n\n"
         f"*사용법*\n"
         f"`/register` - 노션 이름으로 등록\n"
-        f"`/today` - 오늘 일정\n"
-        f"`/tomorrow` - 내일 일정\n"
-        f"`/yesterday` - 어제 일정\n"
-        f"`/date` - 특정 날짜 일정\n"
-        f"`/update` - 오늘 남은 일정 새로고침",
+        f"`/today` - 오늘 내 일정\n"
+        f"`/tomorrow` - 내일 내 일정\n"
+        f"`/date` - 특정 날짜 전체 일정\n"
+        f"`/left` - 오늘 남은 내 일정",
         parse_mode="Markdown",
     )
 
@@ -236,21 +261,17 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode="Markdown",
     )
 
-    logger.info(
-        f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})"
-    )
+    logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
     try:
         target = get_target_date(0)
-        data = await fetch_schedule(target, notion_user["id"])
-        message = format_schedule_message(target, data)
+        cards = await fetch_my_schedule(target, notion_user["id"])
+        message = format_my_schedule_message(target, cards)
 
         await loading_msg.edit_text(message, parse_mode="Markdown")
 
-        # /start 신규 등록 후 오늘 일정까지 보여준 경우도
-        # 현재 상태를 기준 상태로 저장한다.
         from notion_helper import notion as notion_client
         from schedule_monitor import refresh_baseline
 
@@ -269,7 +290,6 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     except Exception as e:
         logger.error(f"[등록 후 일정 조회 실패] {e}")
-
         await loading_msg.edit_text(
             "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
             parse_mode="Markdown",
@@ -318,21 +338,17 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown",
     )
 
-    logger.info(
-        f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})"
-    )
+    logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
     loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
     try:
         target = get_target_date(0)
-        data = await fetch_schedule(target, notion_user["id"])
-        message = format_schedule_message(target, data)
+        cards = await fetch_my_schedule(target, notion_user["id"])
+        message = format_my_schedule_message(target, cards)
 
         await loading_msg.edit_text(message, parse_mode="Markdown")
 
-        # /register 신규 등록 후 오늘 일정까지 보여준 경우도
-        # 현재 상태를 기준 상태로 저장한다.
         from notion_helper import notion as notion_client
         from schedule_monitor import refresh_baseline
 
@@ -351,7 +367,6 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
 
     except Exception as e:
         logger.error(f"[등록 후 일정 조회 실패] {e}")
-
         await loading_msg.edit_text(
             "⚠️ 일정을 불러오지 못했어요.\n잠시 후 `/today` 로 다시 시도해주세요.",
             parse_mode="Markdown",
@@ -383,22 +398,7 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         d = date.fromisoformat(update.message.text.strip())
-        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
-
-        try:
-            data = await fetch_schedule(d, user["notion_user_id"])
-            message = format_schedule_message(d, data)
-
-            await loading_msg.edit_text(message, parse_mode="Markdown")
-
-        except Exception as e:
-            logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
-
-            await loading_msg.edit_text(
-                "⚠️ 일정을 불러오지 못했어요.\n\n"
-                "• 잠시 후 다시 시도해주세요\n"
-                "• 계속 문제가 생기면 관리자에게 문의해주세요"
-            )
+        await send_full_schedule(update, context, d)
 
     except ValueError:
         await update.message.reply_text(
@@ -414,18 +414,14 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── 기타 커맨드 ─────────────────────────────────────────────────────
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_schedule(update, context, offset=0)
+    await send_my_schedule(update, context, offset=0)
 
 
 async def cmd_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_schedule(update, context, offset=1)
+    await send_my_schedule(update, context, offset=1)
 
 
-async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_schedule(update, context, offset=-1)
-
-
-async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_chat.id
     user = get_user(telegram_id)
 
@@ -450,15 +446,13 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user,
         )
 
-        from schedule_monitor import _format_remaining_cards
         body = _format_remaining_cards(current)
-        message = f"📅 *오늘 남은 일정*\n{body}"
+        message = f"📅 *오늘 남은 내 일정*\n{body}"
 
-        # 새 메시지 보내는 대신 로딩 메시지를 바로 수정
         await loading_msg.edit_text(message, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"[/update 실패] {telegram_id}: {e}")
+        logger.error(f"[/left 실패] {telegram_id}: {e}")
         await loading_msg.edit_text(
             "⚠️ 업데이트 중 오류가 발생했어요. 잠시 후 다시 시도해주세요."
         )
@@ -509,8 +503,7 @@ def main():
 
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
-    app.add_handler(CommandHandler("yesterday", cmd_yesterday))
-    app.add_handler(CommandHandler("update", cmd_update))
+    app.add_handler(CommandHandler("left", cmd_left))
 
     scheduler = AsyncIOScheduler(timezone=KST)
 

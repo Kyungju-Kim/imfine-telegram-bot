@@ -412,12 +412,12 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 # ─── 메시지 포맷 ──────────────────────────────────────────────────────
 
 def _card_title_link(card: dict) -> str:
-    """제목에 노션 페이지 링크 연결"""
-    title = escape_md(card["title"] or "(제목 없음)")
+    """제목에 노션 페이지 링크 연결 (링크 안 텍스트는 이스케이프 제외)"""
+    title = card["title"] or "(제목 없음)"
     pid = card.get("page_id", "").replace("-", "")
     if pid:
         return f"[{title}](https://notion.so/{pid})"
-    return title
+    return escape_md(title)
 
 
 def format_my_schedule_message(target: date, cards: list) -> str:

@@ -438,7 +438,10 @@ def _format_remaining_cards(cards: dict) -> str:
 
 def _make_state(cards: dict) -> dict:
     return {
-        pid: {"edited_time": c["edited_time"]}
+        pid: {
+            "edited_time": c["edited_time"],
+            "title": c["title"],
+        }
         for pid, c in cards.items()
     }
 
@@ -555,8 +558,22 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             else:
                 header = "🔔 *일정이 업데이트됐어요!*"
 
+            from notion_helper import escape_md
+
+            detail_lines = []
+            for pid in new_ids:
+                t = escape_md(current[pid]["title"] or "(제목 없음)")
+                detail_lines.append(f"  • {t}")
+            for pid in changed_ids:
+                t = escape_md(current[pid]["title"] or "(제목 없음)")
+                detail_lines.append(f"  • {t}")
+            for pid in deleted_ids:
+                t = escape_md(prev[pid].get("title", "(제목 없음)"))
+                detail_lines.append(f"  • {t} (삭제)")
+
+            detail = "\n".join(detail_lines)
             body = _format_remaining_cards(current)
-            message = f"{header}\n\n📅 *오늘 남은 일정*\n{body}"
+            message = f"{header}\n{detail}\n\n📅 *오늘 남은 일정*\n{body}"
 
             await app.bot.send_message(
                 chat_id=int(telegram_id),

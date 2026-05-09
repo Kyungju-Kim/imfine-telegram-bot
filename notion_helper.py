@@ -6,6 +6,7 @@ import pytz
 KST = pytz.timezone("Asia/Seoul")
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+LONG_RANGE_DAYS = 30
 
 notion = AsyncClient(auth=NOTION_TOKEN)
 
@@ -131,7 +132,7 @@ async def find_notion_user_by_name(name: str) -> dict | None:
 
 # ─── 공통: DB 페이지 조회 ────────────────────────────────────────────
 
-async def _query_pages(target: date, long_range_days: int = 14) -> list:
+async def _query_pages(target: date, long_range_days: int = LONG_RANGE_DAYS) -> list:
     long_range_start = (target - timedelta(days=long_range_days)).isoformat()
 
     pages = []
@@ -139,37 +140,33 @@ async def _query_pages(target: date, long_range_days: int = 14) -> list:
     next_cursor = None
 
     while has_more:
-        try:
-            kwargs = {
-                "database_id": DATABASE_ID,
-                "filter": {
-                    "or": [
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}}
-                            ]
-                        },
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": long_range_start}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}}
-                            ]
-                        }
-                    ]
-                },
-                "page_size": 100
-            }
-            if next_cursor:
-                kwargs["start_cursor"] = next_cursor
+        kwargs = {
+            "database_id": DATABASE_ID,
+            "filter": {
+                "or": [
+                    {
+                        "and": [
+                            {"property": "기간", "date": {"on_or_after": target.isoformat()}},
+                            {"property": "기간", "date": {"on_or_before": target.isoformat()}}
+                        ]
+                    },
+                    {
+                        "and": [
+                            {"property": "기간", "date": {"on_or_after": long_range_start}},
+                            {"property": "기간", "date": {"on_or_before": target.isoformat()}}
+                        ]
+                    }
+                ]
+            },
+            "page_size": 100
+        }
+        if next_cursor:
+            kwargs["start_cursor"] = next_cursor
 
-            response = await notion.databases.query(**kwargs)
-            pages.extend(response.get("results", []))
-            has_more = response.get("has_more", False)
-            next_cursor = response.get("next_cursor")
-        except Exception as e:
-            print(f"[Notion API 오류] {e}")
-            return []
+        response = await notion.databases.query(**kwargs)
+        pages.extend(response.get("results", []))
+        has_more = response.get("has_more", False)
+        next_cursor = response.get("next_cursor")
 
     return pages
 
@@ -182,6 +179,13 @@ def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
             if any(p["id"] == my_notion_user_id for p in people):
                 return True
     return False
+
+
+def _get_assignees(props: dict) -> list[str]:
+    for key in ["Assign", "담당자", "Assignee", "담당", "할당", "사람"]:
+        if key in props:
+            return sorted([p["name"] for p in extract_people(props[key])])
+    return []
 
 
 def _build_time_and_date(start_str, end_str):
@@ -228,7 +232,11 @@ def _card_title_link(card: dict) -> str:
 # ─── 내 일정만 조회 (/today, /tomorrow용) ────────────────────────────
 
 async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
-    pages = await _query_pages(target, long_range_days=14)
+    try:
+        pages = await _query_pages(target)
+    except Exception as e:
+        print(f"[Notion API 오류] {e}")
+        return []
 
     my_cards = []
 
@@ -295,10 +303,19 @@ async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
     return my_cards
 
 
-# ─── 전체 일정 조회 (아침 8시, /date용) ──────────────────────────────
+# ─── 전체 일정 조회 (아침 8시, /date, 등록 직후용) ───────────────────
 
 async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    pages = await _query_pages(target, long_range_days=14)
+    try:
+        pages = await _query_pages(target)
+    except Exception as e:
+        print(f"[Notion API 오류] {e}")
+        return {
+            "vacation": {"휴가": [], "오전반차": [], "오후반차": []},
+            "business_trip": [],
+            "outside_work": [],
+            "my_cards": []
+        }
 
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": []}
     business_trip = []
@@ -332,16 +349,10 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 category = extract_text(props[key])
                 break
 
-        def get_assignees():
-            for key in ["Assign", "담당자", "Assignee", "담당", "할당", "사람"]:
-                if key in props:
-                    return sorted([p["name"] for p in extract_people(props[key])])
-            return []
-
         pid = page.get("id", "")
 
         if "휴가" in category:
-            assignees = get_assignees()
+            assignees = _get_assignees(props)
             if "[오전반차]" in title:
                 vacation_type = "오전반차"
             elif "[오후반차]" in title:
@@ -351,7 +362,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             vacation_result[vacation_type].extend(assignees)
 
         elif "출장" in category or "설치" in category or "외근" in category:
-            assignees = get_assignees()
+            assignees = _get_assignees(props)
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)
 

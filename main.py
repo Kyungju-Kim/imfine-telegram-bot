@@ -224,11 +224,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✓ 일정 추가/변경 시 실시간 알림\n"
         f"✓ 일정 시작 5분 전 미리 알림\n\n"
         f"*사용법*\n"
-        f"`/register` \\- 노션 이름으로 등록\n"
+        f"`/left` \\- 오늘 남은 일정\n"
         f"`/today` \\- 오늘 내 일정\n"
         f"`/tomorrow` \\- 내일 내 일정\n"
         f"`/date` \\- 특정 날짜 전체 일정\n"
-        f"`/left` \\- 오늘 남은 일정",
+        f"`/register` \\- 노션 이름으로 등록",
         parse_mode="MarkdownV2",
     )
 

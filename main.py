@@ -62,7 +62,7 @@ async def send_my_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, o
         _user_tasks[telegram_id].cancel()
 
     async def _fetch_and_reply():
-        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중\.\.\.")
+        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
         try:
             target = get_target_date(offset)
@@ -118,7 +118,7 @@ async def send_full_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         return
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중\.\.\.")
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
     try:
         data = await fetch_schedule(target, user["notion_user_id"])
@@ -267,7 +267,7 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중\.\.\.")
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
     try:
         target = get_target_date(0)
@@ -344,7 +344,7 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
 
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중\.\.\.")
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
     try:
         target = get_target_date(0)
@@ -439,7 +439,7 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from notion_helper import notion as notion_client
     from schedule_monitor import refresh_baseline, _format_remaining_cards
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중\.\.\.")
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
     try:
         current = await refresh_baseline(

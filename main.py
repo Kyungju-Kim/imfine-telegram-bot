@@ -25,7 +25,7 @@ from notion_helper import (
     escape_md,
 )
 from user_store import register_user, get_user, list_users
-from schedule_monitor import check_and_notify, force_check
+from schedule_monitor import check_and_notify
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

@@ -22,12 +22,19 @@ def format_date_korean(d: date) -> str:
 
 
 def escape_md(text: str) -> str:
-    """텔레그램 Markdown V1 특수문자 이스케이프"""
+    """텔레그램 MarkdownV2 특수문자 이스케이프"""
     if not text:
         return ""
-    for char in ['_', '*', '`', '[']:
+    for char in ['\\', '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
         text = text.replace(char, f'\\{char}')
     return text
+
+
+def escape_md_link_text(text: str) -> str:
+    """링크 텍스트용 이스케이프 ([] 만 처리)"""
+    if not text:
+        return ""
+    return text.replace('\\', '\\\\').replace('[', '\\[').replace(']', '\\]')
 
 
 # ─── 속성 추출 ────────────────────────────────────────────────────────
@@ -125,7 +132,6 @@ async def find_notion_user_by_name(name: str) -> dict | None:
 # ─── 공통: DB 페이지 조회 ────────────────────────────────────────────
 
 async def _query_pages(target: date, long_range_days: int = 14) -> list:
-    """Notion DB에서 target 날짜 관련 페이지 조회"""
     long_range_start = (target - timedelta(days=long_range_days)).isoformat()
 
     pages = []
@@ -179,7 +185,6 @@ def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
 
 
 def _build_time_and_date(start_str, end_str):
-    """start_str, end_str로부터 time_str, date_label 계산"""
     start_val, start_has_time = parse_datetime_str(start_str)
     end_val, end_has_time = parse_datetime_str(end_str)
 
@@ -211,14 +216,18 @@ def _build_time_and_date(start_str, end_str):
     return time_str, date_label, start_val
 
 
+def _card_title_link(card: dict) -> str:
+    """제목에 노션 페이지 링크 연결 (MarkdownV2)"""
+    title = escape_md_link_text(card.get("title") or "(제목 없음)")
+    pid = card.get("page_id", "").replace("-", "")
+    if pid:
+        return f"[{title}](https://notion\\.so/{pid})"
+    return escape_md(card.get("title") or "(제목 없음)")
+
+
 # ─── 내 일정만 조회 (/today, /tomorrow용) ────────────────────────────
 
 async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
-    """
-    내 일정만 빠르게 조회 (휴가/출장/외근 제외)
-    /today, /tomorrow 에서 사용
-    """
-    # 내 일정은 당일 시작 일정만 보면 되므로 long_range 최소화
     pages = await _query_pages(target, long_range_days=14)
 
     my_cards = []
@@ -247,7 +256,6 @@ async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
                 category = extract_text(props[key])
                 break
 
-        # 휴가는 내 일정에서 제외
         if "휴가" in category:
             continue
 
@@ -272,9 +280,9 @@ async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
             "room": room,
             "is_trip": "출장" in category or "설치" in category or "외근" in category,
             "start_raw": start_str or "",
+            "page_id": page.get("id", ""),
         })
 
-    # start_raw 기준 정렬
     def sort_key(x):
         raw = x.get("start_raw", "")
         if not raw:
@@ -330,6 +338,8 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                     return sorted([p["name"] for p in extract_people(props[key])])
             return []
 
+        pid = page.get("id", "")
+
         if "휴가" in category:
             assignees = get_assignees()
             if "[오전반차]" in title:
@@ -351,7 +361,6 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 if end_val else start_date
             )
 
-            pid = page.get("id", "")
             if end_date and start_date != end_date:
                 date_label = f"{format_short_date(start_date)} ~ {format_short_date(end_date)}"
                 business_trip.append({"names": assignees, "date": date_label, "start_raw": start_str or ""})
@@ -384,7 +393,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                     if key in props:
                         room = extract_text(props[key])
                         break
-                my_cards.append({"title": title, "time": time_str, "date": date_label, "room": room, "is_trip": False, "start_raw": start_str or "", "page_id": page.get("id", "")})
+                my_cards.append({"title": title, "time": time_str, "date": date_label, "room": room, "is_trip": False, "start_raw": start_str or "", "page_id": pid})
 
     def my_card_sort_key(x):
         raw = x.get("start_raw", "")
@@ -411,37 +420,29 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
 # ─── 메시지 포맷 ──────────────────────────────────────────────────────
 
-def _card_title_link(card: dict) -> str:
-    """제목에 노션 페이지 링크 연결 (링크 안 텍스트는 이스케이프 제외)"""
-    title = card["title"] or "(제목 없음)"
-    pid = card.get("page_id", "").replace("-", "")
-    if pid:
-        return f"[{title}](https://notion.so/{pid})"
-    return escape_md(title)
+def _fmt_card_line(card: dict) -> str:
+    title = _card_title_link(card)
+    room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
+    if card.get("time"):
+        return f"  • `{escape_md(card['time'])}` {title}{room_part}"
+    return f"  • {title}{room_part}"
 
 
 def format_my_schedule_message(target: date, cards: list) -> str:
-    """내 일정만 표시 (/today, /tomorrow용)"""
-    date_str = format_date_korean(target)
+    date_str = escape_md(format_date_korean(target))
     lines = [f"📅 *{date_str} 내 일정*\n"]
 
     if cards:
         for card in cards:
-            title = _card_title_link(card)
-            room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
-            if card.get("time"):
-                lines.append(f"  • `{card['time']}` {title}{room_part}")
-            else:
-                lines.append(f"  • {title}{room_part}")
+            lines.append(_fmt_card_line(card))
     else:
-        lines.append("  • 등록된 일정이 없어요!")
+        lines.append("  • 등록된 일정이 없어요\\!")
 
     return "\n".join(lines)
 
 
 def format_schedule_message(target: date, data: dict) -> str:
-    """전체 일정 표시 (아침 8시, /date용)"""
-    date_str = format_date_korean(target)
+    date_str = escape_md(format_date_korean(target))
     lines = [f"📅 *{date_str} 일정*\n"]
 
     vacation = data["vacation"]
@@ -462,7 +463,7 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("✈️ *출장*")
         for item in business_trip:
             names = ", ".join(escape_md(n) for n in item["names"])
-            lines.append(f"  • {item['date']} {names}")
+            lines.append(f"  • {escape_md(item['date'])} {names}")
         lines.append("")
 
     outside_work = data.get("outside_work", [])
@@ -470,23 +471,18 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("🚗 *외근*")
         for item in outside_work:
             names = ", ".join(escape_md(n) for n in item["names"])
-            lines.append(f"  • `{item['time']}` {names}")
+            lines.append(f"  • `{escape_md(item['time'])}` {names}")
         lines.append("")
 
     my_cards = data["my_cards"]
     if my_cards:
         lines.append("📌 *내 일정*")
         for card in my_cards:
-            title = _card_title_link(card)
-            room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
-            if card.get("time"):
-                lines.append(f"  • `{card['time']}` {title}{room_part}")
-            else:
-                lines.append(f"  • {title}{room_part}")
+            lines.append(_fmt_card_line(card))
         lines.append("")
     else:
         lines.append("📌 *내 일정*")
-        lines.append("  • 등록된 일정이 없어요!")
+        lines.append("  • 등록된 일정이 없어요\\!")
         lines.append("")
 
     return "\n".join(lines)

@@ -441,7 +441,7 @@ def _fmt_card_line(card: dict) -> str:
 
 def format_my_schedule_message(target: date, cards: list) -> str:
     date_str = escape_md(format_date_korean(target))
-    lines = [f"📅 *{date_str} 내 일정*\n"]
+    lines = [f"📅 *{date_str} 내 일정*"]
 
     if cards:
         for card in cards:

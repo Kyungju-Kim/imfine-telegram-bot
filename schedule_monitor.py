@@ -473,7 +473,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
 
             detail = "\n".join(detail_lines)
             body = _format_remaining_cards(current)
-            message = f"{header}\n{detail}\n\n📅 *오늘 남은 일정*\n\n{body}"
+            message = f"{header}\n{detail}\n\n📅 *오늘 남은 일정*\n{body}"
 
             await app.bot.send_message(
                 chat_id=int(telegram_id),

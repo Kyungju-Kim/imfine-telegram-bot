@@ -392,7 +392,7 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
 # ─── 메시지 포맷 ─────────────────────────────────────────────────────
 
 def _format_remaining_cards(cards: dict) -> str:
-    from notion_helper import escape_md, parse_datetime_str
+    from notion_helper import escape_md, parse_datetime_str, _card_title_link
 
     now = datetime.now(KST)
 
@@ -419,7 +419,6 @@ def _format_remaining_cards(cards: dict) -> str:
     lines = []
 
     for page_id, card in remaining + no_time:
-        from notion_helper import _card_title_link
         title = _card_title_link(card)
         room_part = (
             f" 📍 {escape_md(card['room'])}"

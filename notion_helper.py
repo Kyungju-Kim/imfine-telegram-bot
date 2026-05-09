@@ -351,29 +351,30 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 if end_val else start_date
             )
 
+            pid = page.get("id", "")
             if end_date and start_date != end_date:
                 date_label = f"{format_short_date(start_date)} ~ {format_short_date(end_date)}"
                 business_trip.append({"names": assignees, "date": date_label, "start_raw": start_str or ""})
                 if _is_my_card(props, my_notion_user_id):
-                    my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or ""})
+                    my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
 
             elif start_has_time and start_val:
                 t_start = start_val.strftime("%H:%M")
                 time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}" if end_has_time and end_val else t_start
                 outside_work.append({"names": assignees, "time": time_str, "time_raw": start_str or ""})
                 if _is_my_card(props, my_notion_user_id):
-                    my_cards.append({"title": title, "time": time_str, "date": None, "room": "", "is_trip": True, "start_raw": start_str or ""})
+                    my_cards.append({"title": title, "time": time_str, "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
 
             else:
                 if end_val:
                     date_label = format_short_date(start_date) if start_date == end_date else f"{format_short_date(start_date)} ~ {format_short_date(end_date)}"
                     business_trip.append({"names": assignees, "date": date_label, "start_raw": start_str or ""})
                     if _is_my_card(props, my_notion_user_id):
-                        my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or ""})
+                        my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
                 else:
                     outside_work.append({"names": assignees, "time": "종일", "time_raw": start_str or ""})
                     if _is_my_card(props, my_notion_user_id):
-                        my_cards.append({"title": title, "time": "종일", "date": None, "room": "", "is_trip": True, "start_raw": start_str or ""})
+                        my_cards.append({"title": title, "time": "종일", "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
 
         else:
             if _is_my_card(props, my_notion_user_id):
@@ -383,7 +384,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                     if key in props:
                         room = extract_text(props[key])
                         break
-                my_cards.append({"title": title, "time": time_str, "date": date_label, "room": room, "is_trip": False, "start_raw": start_str or ""})
+                my_cards.append({"title": title, "time": time_str, "date": date_label, "room": room, "is_trip": False, "start_raw": start_str or "", "page_id": page.get("id", "")})
 
     def my_card_sort_key(x):
         raw = x.get("start_raw", "")
@@ -410,6 +411,15 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
 # ─── 메시지 포맷 ──────────────────────────────────────────────────────
 
+def _card_title_link(card: dict) -> str:
+    """제목에 노션 페이지 링크 연결"""
+    title = escape_md(card["title"] or "(제목 없음)")
+    pid = card.get("page_id", "").replace("-", "")
+    if pid:
+        return f"[{title}](https://notion.so/{pid})"
+    return title
+
+
 def format_my_schedule_message(target: date, cards: list) -> str:
     """내 일정만 표시 (/today, /tomorrow용)"""
     date_str = format_date_korean(target)
@@ -417,7 +427,7 @@ def format_my_schedule_message(target: date, cards: list) -> str:
 
     if cards:
         for card in cards:
-            title = escape_md(card["title"] or "(제목 없음)")
+            title = _card_title_link(card)
             room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
             if card.get("time"):
                 lines.append(f"  • `{card['time']}` {title}{room_part}")
@@ -467,7 +477,7 @@ def format_schedule_message(target: date, data: dict) -> str:
     if my_cards:
         lines.append("📌 *내 일정*")
         for card in my_cards:
-            title = escape_md(card["title"] or "(제목 없음)")
+            title = _card_title_link(card)
             room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
             if card.get("time"):
                 lines.append(f"  • `{card['time']}` {title}{room_part}")

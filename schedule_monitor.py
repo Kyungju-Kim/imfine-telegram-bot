@@ -569,7 +569,8 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 detail_lines.append(f"  • {t}")
             for pid in deleted_ids:
                 t = escape_md(prev[pid].get("title", "(제목 없음)"))
-                detail_lines.append(f"  • {t} (삭제)")
+                suffix = " (삭제)" if (new_ids or changed_ids) else ""
+                detail_lines.append(f"  • {t}{suffix}")
 
             detail = "\n".join(detail_lines)
             body = _format_remaining_cards(current)

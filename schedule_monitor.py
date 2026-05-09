@@ -492,25 +492,3 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
 
         except Exception as e:
             logger.error(f"[모니터] {telegram_id} 처리 실패: {e}")
-
-
-async def force_check(app, notion_client, database_id: str, telegram_id: str, user_info: dict):
-    try:
-        telegram_id = str(telegram_id)
-
-        current = await refresh_baseline(app, notion_client, database_id, telegram_id, user_info)
-
-        body = _format_remaining_cards(current)
-        message = f"📅 *오늘 남은 일정*\n\n{body}"
-
-        await app.bot.send_message(
-            chat_id=int(telegram_id),
-            text=message,
-            parse_mode="MarkdownV2"
-        )
-
-        logger.info(f"[강제 업데이트] {user_info['notion_name']} 완료")
-
-    except Exception as e:
-        logger.error(f"[강제 업데이트] {telegram_id}: {e}")
-        raise

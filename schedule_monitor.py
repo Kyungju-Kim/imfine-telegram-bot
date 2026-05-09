@@ -184,49 +184,45 @@ async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_i
     from notion_helper import (
         extract_date_range, extract_text, extract_people,
         parse_datetime_str, is_card_on_date, format_short_date,
+        LONG_RANGE_DAYS,
     )
 
     target = datetime.now(KST).date()
-    long_range_start = (target - timedelta(days=14)).isoformat()
+    long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
 
     pages = []
     has_more = True
     next_cursor = None
 
     while has_more:
-        try:
-            kwargs = {
-                "database_id": database_id,
-                "filter": {
-                    "or": [
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": long_range_start}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                    ]
-                },
-                "page_size": 100,
-            }
+        kwargs = {
+            "database_id": database_id,
+            "filter": {
+                "or": [
+                    {
+                        "and": [
+                            {"property": "기간", "date": {"on_or_after": target.isoformat()}},
+                            {"property": "기간", "date": {"on_or_before": target.isoformat()}},
+                        ]
+                    },
+                    {
+                        "and": [
+                            {"property": "기간", "date": {"on_or_after": long_range_start}},
+                            {"property": "기간", "date": {"on_or_before": target.isoformat()}},
+                        ]
+                    },
+                ]
+            },
+            "page_size": 100,
+        }
 
-            if next_cursor:
-                kwargs["start_cursor"] = next_cursor
+        if next_cursor:
+            kwargs["start_cursor"] = next_cursor
 
-            response = await notion_client.databases.query(**kwargs)
-            pages.extend(response.get("results", []))
-            has_more = response.get("has_more", False)
-            next_cursor = response.get("next_cursor")
-
-        except Exception as e:
-            logger.error(f"[모니터] Notion API 오류: {e}")
-            return {}
+        response = await notion_client.databases.query(**kwargs)
+        pages.extend(response.get("results", []))
+        has_more = response.get("has_more", False)
+        next_cursor = response.get("next_cursor")
 
     result = {}
 

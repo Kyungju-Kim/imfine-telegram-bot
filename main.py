@@ -471,7 +471,7 @@ def main():
     restore_from_sheets()
 
     async def post_init(app):
-        await run_monitor(app)
+        asyncio.create_task(run_monitor(app))
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 

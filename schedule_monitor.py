@@ -427,15 +427,15 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 register_all_reminders(app, notion_client, database_id, telegram_id, notion_user_id, current)
                 continue
 
-            new_ids = set()
-            changed_ids = set()
-            deleted_ids = set(prev.keys()) - set(current.keys())
+            new_ids = list()
+            changed_ids = list()
+            deleted_ids = list(set(prev.keys()) - set(current.keys()))
 
             for page_id, card in current.items():
                 if page_id not in prev:
-                    new_ids.add(page_id)
+                    new_ids.append(page_id)
                 elif prev[page_id]["edited_time"] != card["edited_time"]:
-                    changed_ids.add(page_id)
+                    changed_ids.append(page_id)
 
             _prev_state[telegram_id] = _make_state(current)
 

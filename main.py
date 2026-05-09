@@ -470,7 +470,10 @@ def main():
 
     restore_from_sheets()
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    async def post_init(app):
+        await run_monitor(app)
+
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
     start_handler = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
@@ -555,11 +558,6 @@ def main():
 
     from schedule_monitor import set_scheduler
     set_scheduler(scheduler)
-
-    async def post_init(app):
-        await run_monitor(app)
-
-    app.post_init = post_init
 
     logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금 / 3분마다 일정 모니터링)")
     logger.info("봇 시작!")

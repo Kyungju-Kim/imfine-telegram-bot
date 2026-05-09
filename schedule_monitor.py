@@ -419,7 +419,8 @@ def _format_remaining_cards(cards: dict) -> str:
     lines = []
 
     for page_id, card in remaining + no_time:
-        title = escape_md(card["title"] or "(제목 없음)")
+        from notion_helper import _card_title_link
+        title = _card_title_link(card)
         room_part = (
             f" 📍 {escape_md(card['room'])}"
             if card.get("room")
@@ -604,7 +605,7 @@ async def force_check(app, notion_client, database_id: str, telegram_id: str, us
         )
 
         body = _format_remaining_cards(current)
-        message = f"📅 *오늘 남은 일정*\n{body}"
+        message = f"📅 *오늘 남은 일정*\n\n{body}"
 
         await app.bot.send_message(
             chat_id=int(telegram_id),

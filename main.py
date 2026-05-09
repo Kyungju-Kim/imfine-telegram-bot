@@ -447,7 +447,7 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         body = _format_remaining_cards(current)
-        message = f"📅 *오늘 남은 내 일정*\n{body}"
+        message = f"📅 *오늘 남은 일정*\n\n{body}"
 
         await loading_msg.edit_text(message, parse_mode="Markdown")
 

@@ -305,6 +305,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                     logger.info(f"[모니터] {telegram_id} 날짜 변경 감지 → 상태 초기화")
                     prev = None
                     _prev_state.pop(telegram_id, None)
+                    _prev_state_date.pop(telegram_id, None)
 
                 if prev is None:
                     _prev_state[telegram_id] = _make_state(current)

@@ -489,12 +489,12 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(MSG_ENTER_NAME)
+    await update.message.reply_text(MSG_ENTER_NAME, parse_mode="MarkdownV2")
     return WAITING_NAME_FROM_START
 
 
 async def _ask_name_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(MSG_ENTER_NAME)
+    await update.message.reply_text(MSG_ENTER_NAME, parse_mode="MarkdownV2")
     return WAITING_NAME
 
 

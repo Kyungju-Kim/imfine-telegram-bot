@@ -4,10 +4,13 @@ schedule_monitor.py
 + 시간이 있는 일정 5분 전 알림
 """
 
+import asyncio
 import logging
 import os
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, date
 from zoneinfo import ZoneInfo
+
+from notion_helper import fetch_my_cards_today, get_target_date
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +21,9 @@ DEBUG_MODE = (
 )
 
 _prev_state: dict[str, dict] = {}
-
+_prev_state_date: dict[str, date] = {}  # 유저별 마지막 갱신 날짜
 _scheduler = None
+_monitor_lock = asyncio.Lock()
 
 
 def set_scheduler(scheduler):
@@ -53,10 +57,12 @@ async def _send_reminder(
     from notion_helper import escape_md, parse_datetime_str, _card_title_link
 
     try:
+        target = get_target_date(0)
         current = await fetch_my_cards_today(
-            notion_client,
-            database_id,
+            target,
             notion_user_id,
+            notion_client=notion_client,
+            database_id=database_id,
         )
 
         if page_id not in current:
@@ -178,150 +184,6 @@ def register_all_reminders(app, notion_client, database_id, telegram_id, notion_
         _register_reminder(app, notion_client, database_id, telegram_id, notion_user_id, page_id, card)
 
 
-# ─── Notion 카드 조회 ─────────────────────────────────────────────────
-
-async def fetch_my_cards_today(notion_client, database_id: str, my_notion_user_id: str) -> dict:
-    from notion_helper import (
-        extract_date_range, extract_text, extract_people,
-        parse_datetime_str, is_card_on_date, format_short_date,
-        LONG_RANGE_DAYS,
-    )
-
-    target = datetime.now(KST).date()
-    long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
-
-    pages = []
-    has_more = True
-    next_cursor = None
-
-    while has_more:
-        kwargs = {
-            "database_id": database_id,
-            "filter": {
-                "or": [
-                    {
-                        "and": [
-                            {"property": "기간", "date": {"on_or_after": target.isoformat()}},
-                            {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                        ]
-                    },
-                    {
-                        "and": [
-                            {"property": "기간", "date": {"on_or_after": long_range_start}},
-                            {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                        ]
-                    },
-                ]
-            },
-            "page_size": 100,
-        }
-
-        if next_cursor:
-            kwargs["start_cursor"] = next_cursor
-
-        response = await notion_client.databases.query(**kwargs)
-        pages.extend(response.get("results", []))
-        has_more = response.get("has_more", False)
-        next_cursor = response.get("next_cursor")
-
-    result = {}
-
-    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
-
-    for page in pages:
-        props = page.get("properties", {})
-        page_id = page["id"]
-
-        is_mine = False
-        for key in check_keys:
-            if key in props:
-                people = [p.get("id", "") for p in props[key].get("people", [])]
-                if my_notion_user_id in people:
-                    is_mine = True
-                    break
-
-        if not is_mine:
-            continue
-
-        date_prop = None
-        for key in ["기간", "날짜", "Date", "date", "일정"]:
-            if key in props:
-                date_prop = props[key]
-                break
-
-        if not date_prop:
-            continue
-
-        start_str, end_str = extract_date_range(date_prop)
-
-        if not is_card_on_date(start_str, end_str, target):
-            continue
-
-        category = ""
-        for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
-            if key in props:
-                category = extract_text(props[key])
-                break
-
-        if "휴가" in category:
-            continue
-
-        title = ""
-        for key in ["Name", "이름", "name", "제목", "Title"]:
-            if key in props:
-                title = extract_text(props[key])
-                break
-
-        start_val, start_has_time = parse_datetime_str(start_str)
-        end_val, end_has_time = parse_datetime_str(end_str)
-
-        time_str = None
-        date_label = None
-
-        if start_has_time and start_val:
-            if end_has_time and end_val:
-                if start_val.date() == end_val.date():
-                    time_str = f"{start_val.strftime('%H:%M')} ~ {end_val.strftime('%H:%M')}"
-                else:
-                    time_str = (
-                        f"{start_val.month}/{start_val.day} "
-                        f"{start_val.strftime('%H:%M')} ~ "
-                        f"{end_val.month}/{end_val.day} "
-                        f"{end_val.strftime('%H:%M')}"
-                    )
-            else:
-                time_str = start_val.strftime("%H:%M")
-
-        elif start_val:
-            start_d = start_val.date() if hasattr(start_val, "date") else start_val
-            end_d = (end_val.date() if hasattr(end_val, "date") else end_val) if end_val else None
-
-            if end_d and start_d != end_d:
-                date_label = f"{format_short_date(start_d)} ~ {format_short_date(end_d)}"
-            else:
-                date_label = format_short_date(start_d)
-
-        room = ""
-        for key in ["회의실 예약", "회의실", "장소"]:
-            if key in props:
-                room = extract_text(props[key])
-                break
-
-        result[page_id] = {
-            "title": title,
-            "time": time_str,
-            "date": date_label,
-            "room": room,
-            "start_raw": start_str or "",
-            "end_raw": end_str or "",
-            "created_time": page.get("created_time", ""),
-            "edited_time": page.get("last_edited_time", ""),
-            "page_id": page_id,
-        }
-
-    return result
-
-
 # ─── 메시지 포맷 ─────────────────────────────────────────────────────
 
 def _format_remaining_cards(cards: dict) -> str:
@@ -376,11 +238,13 @@ def _make_state(cards: dict) -> dict:
 
 async def refresh_baseline(app, notion_client, database_id: str, telegram_id: str, user_info: dict) -> dict:
     telegram_id = str(telegram_id)
+    target = get_target_date(0)
 
     current = await fetch_my_cards_today(
-        notion_client,
-        database_id,
-        user_info["notion_user_id"]
+        target,
+        user_info["notion_user_id"],
+        notion_client=notion_client,
+        database_id=database_id,
     )
 
     prev = _prev_state.get(telegram_id, {})
@@ -400,6 +264,7 @@ async def refresh_baseline(app, notion_client, database_id: str, telegram_id: st
             )
 
     _prev_state[telegram_id] = _make_state(current)
+    _prev_state_date[telegram_id] = target
 
     logger.info(f"[기준 상태 갱신] {user_info.get('notion_name', telegram_id)} - {len(current)}건")
 
@@ -412,79 +277,104 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
     if not _is_work_hour() or not _is_weekday():
         return
 
-    for telegram_id, user_info in users.items():
-        telegram_id = str(telegram_id)
+    if _monitor_lock.locked():
+        logger.warning("[모니터] 이전 폴링 실행 중, 스킵")
+        return
 
-        try:
-            notion_user_id = user_info["notion_user_id"]
+    async with _monitor_lock:
+        target = get_target_date(0)
 
-            current = await fetch_my_cards_today(notion_client, database_id, notion_user_id)
+        for telegram_id, user_info in users.items():
+            telegram_id = str(telegram_id)
 
-            prev = _prev_state.get(telegram_id, None)
+            try:
+                notion_user_id = user_info["notion_user_id"]
 
-            if prev is None:
+                current = await fetch_my_cards_today(
+                    target,
+                    notion_user_id,
+                    notion_client=notion_client,
+                    database_id=database_id,
+                )
+
+                prev = _prev_state.get(telegram_id, None)
+                today = target
+
+                # 날짜가 바뀌었으면 prev_state 초기화
+                if prev is not None and _prev_state_date.get(telegram_id) != today:
+                    logger.info(f"[모니터] {telegram_id} 날짜 변경 감지 → 상태 초기화")
+                    prev = None
+                    _prev_state.pop(telegram_id, None)
+
+                if prev is None:
+                    _prev_state[telegram_id] = _make_state(current)
+                _prev_state_date[telegram_id] = today
+                    _prev_state_date[telegram_id] = today
+                    register_all_reminders(app, notion_client, database_id, telegram_id, notion_user_id, current)
+                    continue
+
+                new_ids = list()
+                changed_ids = list()
+                deleted_ids = list(set(prev.keys()) - set(current.keys()))
+
+                for page_id, card in current.items():
+                    if page_id not in prev:
+                        new_ids.append(page_id)
+                    elif prev[page_id]["edited_time"] != card["edited_time"]:
+                        changed_ids.append(page_id)
+
                 _prev_state[telegram_id] = _make_state(current)
-                register_all_reminders(app, notion_client, database_id, telegram_id, notion_user_id, current)
-                continue
 
-            new_ids = list()
-            changed_ids = list()
-            deleted_ids = list(set(prev.keys()) - set(current.keys()))
+                for page_id in new_ids:
+                    _register_reminder(app, notion_client, database_id, telegram_id, notion_user_id, page_id, current[page_id])
+                for page_id in changed_ids:
+                    _register_reminder(app, notion_client, database_id, telegram_id, notion_user_id, page_id, current[page_id])
+                for page_id in deleted_ids:
+                    _remove_reminder(telegram_id, page_id)
 
-            for page_id, card in current.items():
-                if page_id not in prev:
-                    new_ids.append(page_id)
-                elif prev[page_id]["edited_time"] != card["edited_time"]:
-                    changed_ids.append(page_id)
+                if not new_ids and not changed_ids and not deleted_ids:
+                    continue
 
-            _prev_state[telegram_id] = _make_state(current)
+                from notion_helper import escape_md
 
-            for page_id in new_ids:
-                _register_reminder(app, notion_client, database_id, telegram_id, notion_user_id, page_id, current[page_id])
-            for page_id in changed_ids:
-                _register_reminder(app, notion_client, database_id, telegram_id, notion_user_id, page_id, current[page_id])
-            for page_id in deleted_ids:
-                _remove_reminder(telegram_id, page_id)
+                if new_ids and not changed_ids and not deleted_ids:
+                    header = "🔔 *새 일정이 추가됐어요\\!*"
+                elif changed_ids and not new_ids and not deleted_ids:
+                    header = "🔔 *일정이 변경됐어요\\!*"
+                elif deleted_ids and not new_ids and not changed_ids:
+                    header = "🔔 *일정이 삭제됐어요\\!*"
+                else:
+                    header = "🔔 *일정이 업데이트됐어요\\!*"
 
-            if not new_ids and not changed_ids and not deleted_ids:
-                continue
+                detail_lines = []
+                for pid in new_ids:
+                    t = escape_md(current[pid]["title"] or "(제목 없음)")
+                    detail_lines.append(f"  • {t}")
+                for pid in changed_ids:
+                    t = escape_md(current[pid]["title"] or "(제목 없음)")
+                    detail_lines.append(f"  • {t}")
+                for pid in deleted_ids:
+                    t = escape_md(prev[pid].get("title", "(제목 없음)"))
+                    detail_lines.append(f"  • ~{t}~")
 
-            from notion_helper import escape_md
+                detail = "\n".join(detail_lines)
+                body = _format_remaining_cards(current)
+                message = f"{header}\n{detail}\n\n📅 *오늘 남은 일정*\n{body}"
 
-            if new_ids and not changed_ids and not deleted_ids:
-                header = "🔔 *새 일정이 추가됐어요\\!*"
-            elif changed_ids and not new_ids and not deleted_ids:
-                header = "🔔 *일정이 변경됐어요\\!*"
-            elif deleted_ids and not new_ids and not changed_ids:
-                header = "🔔 *일정이 삭제됐어요\\!*"
-            else:
-                header = "🔔 *일정이 업데이트됐어요\\!*"
+                await app.bot.send_message(
+                    chat_id=int(telegram_id),
+                    text=message,
+                    parse_mode="MarkdownV2"
+                )
 
-            detail_lines = []
-            for pid in new_ids:
-                t = escape_md(current[pid]["title"] or "(제목 없음)")
-                detail_lines.append(f"  • {t}")
-            for pid in changed_ids:
-                t = escape_md(current[pid]["title"] or "(제목 없음)")
-                detail_lines.append(f"  • {t}")
-            for pid in deleted_ids:
-                t = escape_md(prev[pid].get("title", "(제목 없음)"))
-                detail_lines.append(f"  • ~{t}~")
+                # 발송 성공 후 상태 갱신
+                _prev_state[telegram_id] = _make_state(current)
+                _prev_state_date[telegram_id] = today
 
-            detail = "\n".join(detail_lines)
-            body = _format_remaining_cards(current)
-            message = f"{header}\n{detail}\n\n📅 *오늘 남은 일정*\n{body}"
+                logger.info(
+                    f"[모니터] {user_info['notion_name']} 변경 알림 발송 "
+                    f"(새:{len(new_ids)} 변경:{len(changed_ids)} 삭제:{len(deleted_ids)})"
+                )
 
-            await app.bot.send_message(
-                chat_id=int(telegram_id),
-                text=message,
-                parse_mode="MarkdownV2"
-            )
-
-            logger.info(
-                f"[모니터] {user_info['notion_name']} 변경 알림 발송 "
-                f"(새:{len(new_ids)} 변경:{len(changed_ids)} 삭제:{len(deleted_ids)})"
-            )
-
-        except Exception as e:
-            logger.error(f"[모니터] {telegram_id} 처리 실패: {e}")
+            except Exception as e:
+                logger.error(f"[모니터] {telegram_id} 처리 실패: {e}")

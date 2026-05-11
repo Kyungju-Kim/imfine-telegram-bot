@@ -1,575 +1,617 @@
-import asyncio
-from notion_client import AsyncClient
-from datetime import datetime, date, timedelta
 import os
+import logging
+import asyncio
+from datetime import date
+
 import pytz
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from notion_helper import (
+    fetch_schedule,
+    fetch_my_schedule,
+    format_schedule_message,
+    format_my_schedule_message,
+    get_target_date,
+    find_notion_user_by_name,
+    escape_md,
+)
+from user_store import register_user, get_user, list_users
+from schedule_monitor import check_and_notify
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 KST = pytz.timezone("Asia/Seoul")
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
-LONG_RANGE_DAYS = 30
-NOTION_TIMEOUT = 10  # 초
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-notion = AsyncClient(auth=NOTION_TOKEN)
+WAITING_NAME = 1
+WAITING_DATE = 2
+WAITING_NAME_FROM_START = 3
 
+MSG_ENTER_NAME = "노션에 등록된 이름을 입력해주세요 😊\n예: `홍길동`"
 
-# ─── 날짜 유틸 ────────────────────────────────────────────────────────
-
-def get_target_date(offset: int = 0) -> date:
-    return (datetime.now(KST) + timedelta(days=offset)).date()
+_user_tasks: dict[int, asyncio.Task] = {}
 
 
-def format_date_korean(d: date) -> str:
-    weekdays = ["월", "화", "수", "목", "금", "토", "일"]
-    return f"{d.month}월 {d.day}일 ({weekdays[d.weekday()]})"
+# ─── 공통: 내 일정만 조회 및 발송 (/today, /tomorrow) ────────────────
 
+async def send_my_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
 
-def escape_md(text: str) -> str:
-    """텔레그램 MarkdownV2 특수문자 이스케이프"""
-    if not text:
-        return ""
-    for char in ['\\', '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
-        text = text.replace(char, f'\\{char}')
-    return text
-
-
-def escape_md_link_text(text: str) -> str:
-    """링크 텍스트용 이스케이프 ([] 만 처리)"""
-    if not text:
-        return ""
-    return text.replace('\\', '\\\\').replace('[', '\\[').replace(']', '\\]')
-
-
-# ─── 속성 추출 ────────────────────────────────────────────────────────
-
-def extract_text(prop) -> str:
-    if not prop:
-        return ""
-    ptype = prop.get("type")
-    if ptype == "title":
-        return "".join(t["plain_text"] for t in prop.get("title", []))
-    if ptype == "rich_text":
-        return "".join(t["plain_text"] for t in prop.get("rich_text", []))
-    if ptype == "select":
-        sel = prop.get("select")
-        return sel["name"] if sel else ""
-    if ptype == "multi_select":
-        return ", ".join(s["name"] for s in prop.get("multi_select", []))
-    return ""
-
-
-def extract_people(prop) -> list[dict]:
-    if not prop:
-        return []
-    return [
-        {"id": p.get("id", ""), "name": p.get("name", "")}
-        for p in prop.get("people", [])
-    ]
-
-
-def extract_date_range(prop) -> tuple[str | None, str | None]:
-    if not prop or prop.get("type") != "date":
-        return None, None
-    date_obj = prop.get("date")
-    if not date_obj:
-        return None, None
-    return date_obj.get("start"), date_obj.get("end")
-
-
-def parse_datetime_str(s: str | None):
-    if not s:
-        return None, False
-    has_time = "T" in s
-    if has_time:
-        try:
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = KST.localize(dt)
-            return dt.astimezone(KST), True
-        except Exception:
-            return None, False
-    else:
-        try:
-            return datetime.strptime(s, "%Y-%m-%d").date(), False
-        except Exception:
-            return None, False
-
-
-def is_card_on_date(start_str, end_str, target: date) -> bool:
-    start_val, start_has_time = parse_datetime_str(start_str)
-    end_val, _ = parse_datetime_str(end_str)
-    if start_val is None:
-        return False
-    start_date = start_val.date() if start_has_time else start_val
-    if end_val is None:
-        return start_date == target
-    else:
-        end_date = end_val.date() if hasattr(end_val, "date") else end_val
-        return start_date <= target <= end_date
-
-
-def format_short_date(d) -> str:
-    if hasattr(d, "date"):
-        d = d.date()
-    return f"{d.month}/{d.day}"
-
-
-# ─── Notion 유저 검색 ─────────────────────────────────────────────────
-
-async def find_notion_user_by_name(name: str) -> tuple[dict | None, bool]:
-    """
-    Returns (user, success)
-    - (user_dict, True): 찾음
-    - (None, True): 못 찾음 (API는 정상)
-    - (None, False): API 오류
-    """
-    try:
-        response = await notion.users.list()
-        users = response.get("results", [])
-        for user in users:
-            if user.get("name") == name:
-                return {"id": user["id"], "name": user["name"]}, True
-        for user in users:
-            if name in user.get("name", ""):
-                return {"id": user["id"], "name": user["name"]}, True
-        return None, True
-    except Exception as e:
-        print(f"[Notion 유저 검색 오류] {e}")
-        return None, False
-
-
-# ─── 공통: DB 페이지 조회 ────────────────────────────────────────────
-
-async def _query_pages(target: date, long_range_days: int = LONG_RANGE_DAYS) -> list:
-    long_range_start = (target - timedelta(days=long_range_days)).isoformat()
-
-    pages = []
-    has_more = True
-    next_cursor = None
-
-    while has_more:
-        kwargs = {
-            "database_id": DATABASE_ID,
-            "filter": {
-                "or": [
-                    {
-                        "and": [
-                            {"property": "기간", "date": {"on_or_after": target.isoformat()}},
-                            {"property": "기간", "date": {"on_or_before": target.isoformat()}}
-                        ]
-                    },
-                    {
-                        "and": [
-                            {"property": "기간", "date": {"on_or_after": long_range_start}},
-                            {"property": "기간", "date": {"on_or_before": target.isoformat()}}
-                        ]
-                    }
-                ]
-            },
-            "page_size": 100
-        }
-        if next_cursor:
-            kwargs["start_cursor"] = next_cursor
-
-        response = await asyncio.wait_for(
-            notion.databases.query(**kwargs),
-            timeout=NOTION_TIMEOUT,
+    if not user:
+        await update.message.reply_text(
+            "❗ 아직 등록이 안 됐어요\\!\n"
+            "노션 이름으로 등록해주세요:\n"
+            "`/register`",
+            parse_mode="MarkdownV2",
         )
-        pages.extend(response.get("results", []))
-        has_more = response.get("has_more", False)
-        next_cursor = response.get("next_cursor")
+        return
 
-    return pages
+    if telegram_id in _user_tasks and not _user_tasks[telegram_id].done():
+        _user_tasks[telegram_id].cancel()
 
+    async def _fetch_and_reply():
+        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
-def _is_my_card(props: dict, my_notion_user_id: str) -> bool:
-    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
-    for key in check_keys:
-        if key in props:
-            people = extract_people(props[key])
-            if any(p["id"] == my_notion_user_id for p in people):
-                return True
-    return False
+        try:
+            target = get_target_date(offset)
+            cards = await fetch_my_schedule(target, user["notion_user_id"])
+            message = format_my_schedule_message(target, cards)
 
+            await loading_msg.edit_text(message, parse_mode="MarkdownV2")
 
-def _get_assignees(props: dict) -> list[str]:
-    for key in ["Assign", "담당자", "Assignee", "담당", "할당", "사람"]:
-        if key in props:
-            return sorted([p["name"] for p in extract_people(props[key])])
-    return []
+            if offset == 0:
+                from notion_helper import notion as notion_client
+                from schedule_monitor import refresh_baseline
 
-
-def _build_time_and_date(start_str, end_str):
-    start_val, start_has_time = parse_datetime_str(start_str)
-    end_val, end_has_time = parse_datetime_str(end_str)
-
-    time_str = None
-    date_label = None
-
-    if start_has_time and start_val:
-        t_start = start_val.strftime("%H:%M")
-        if end_has_time and end_val:
-            if start_val.date() == end_val.date():
-                time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}"
-            else:
-                time_str = (
-                    f"{start_val.month}/{start_val.day} {t_start} ~ "
-                    f"{end_val.month}/{end_val.day} {end_val.strftime('%H:%M')}"
+                await refresh_baseline(
+                    context.application,
+                    notion_client,
+                    os.environ["NOTION_DATABASE_ID"],
+                    str(telegram_id),
+                    user,
                 )
-        else:
-            time_str = t_start
-    elif start_val:
-        start_d = start_val.date() if hasattr(start_val, "date") else start_val
-        end_d = (
-            end_val.date() if hasattr(end_val, "date") else end_val
-        ) if end_val else None
-        if end_d and start_d != end_d:
-            date_label = f"{format_short_date(start_d)} ~ {format_short_date(end_d)}"
-        else:
-            date_label = format_short_date(start_d)
 
-    return time_str, date_label, start_val
+        except asyncio.CancelledError:
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
 
+        except Exception as e:
+            logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
+            try:
+                await loading_msg.edit_text(
+                    "⚠️ 일정을 불러오지 못했어요\\.\n\n"
+                    "• 잠시 후 다시 시도해주세요\n"
+                    "• 계속 문제가 생기면 관리자에게 문의해주세요",
+                    parse_mode="MarkdownV2",
+                )
+            except Exception:
+                pass
 
-def _card_title_link(card: dict) -> str:
-    """제목에 노션 페이지 링크 연결 (MarkdownV2)"""
-    title = escape_md_link_text(card.get("title") or "(제목 없음)")
-    pid = card.get("page_id", "").replace("-", "")
-    if pid:
-        return f"[{title}](https://notion\\.so/{pid})"
-    return escape_md(card.get("title") or "(제목 없음)")
-
-
-def _sort_key(card: dict) -> str:
-    raw = card.get("start_raw", "")
-    if not raw:
-        return "9999"
-    if "T" not in raw:
-        return raw + "T00:00"
-    return raw
+    task = asyncio.create_task(_fetch_and_reply())
+    _user_tasks[telegram_id] = task
 
 
-# ─── 내 카드 조회 (통합) ─────────────────────────────────────────────
+# ─── 공통: 전체 일정 조회 및 발송 (/date) ───────────────────────────
 
-async def fetch_my_cards_today(
-    target: date,
-    my_notion_user_id: str,
-    notion_client=None,
-    database_id: str = None,
-) -> dict:
-    """
-    오늘 내 카드를 dict[page_id, card]로 반환.
-    폴링/변경감지/5분전알림/refresh_baseline 에서 사용.
+async def send_full_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, target: date):
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
 
-    notion_client, database_id 는 schedule_monitor에서 호출할 때만 전달.
-    미전달 시 모듈 레벨 notion / DATABASE_ID 사용.
-    """
-    client = notion_client or notion
-    db_id = database_id or DATABASE_ID
+    if not user:
+        await update.message.reply_text(
+            "먼저 `/register` 로 등록해주세요\\!",
+            parse_mode="MarkdownV2",
+        )
+        return
 
-    # schedule_monitor는 자체 쿼리, notion_helper는 _query_pages 재사용
-    if notion_client:
-        # schedule_monitor에서 직접 호출 시 - 자체 쿼리
-        long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
-        pages = []
-        has_more = True
-        next_cursor = None
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
 
-        while has_more:
-            kwargs = {
-                "database_id": db_id,
-                "filter": {
-                    "or": [
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": long_range_start}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                    ]
-                },
-                "page_size": 100,
-            }
-            if next_cursor:
-                kwargs["start_cursor"] = next_cursor
-
-            response = await asyncio.wait_for(
-                client.databases.query(**kwargs),
-                timeout=NOTION_TIMEOUT,
-            )
-            pages.extend(response.get("results", []))
-            has_more = response.get("has_more", False)
-            next_cursor = response.get("next_cursor")
-    else:
-        pages = await _query_pages(target)
-
-    result = {}
-    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
-
-    for page in pages:
-        props = page.get("properties", {})
-        page_id = page["id"]
-
-        is_mine = False
-        for key in check_keys:
-            if key in props:
-                people = [p.get("id", "") for p in props[key].get("people", [])]
-                if my_notion_user_id in people:
-                    is_mine = True
-                    break
-
-        if not is_mine:
-            continue
-
-        date_prop = None
-        for key in ["기간", "날짜", "Date", "date", "일정"]:
-            if key in props:
-                date_prop = props[key]
-                break
-        if not date_prop:
-            continue
-
-        start_str, end_str = extract_date_range(date_prop)
-        if not is_card_on_date(start_str, end_str, target):
-            continue
-
-        category = ""
-        for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
-            if key in props:
-                category = extract_text(props[key])
-                break
-
-        if "휴가" in category:
-            continue
-
-        title = ""
-        for key in ["Name", "이름", "name", "제목", "Title"]:
-            if key in props:
-                title = extract_text(props[key])
-                break
-
-        time_str, date_label, _ = _build_time_and_date(start_str, end_str)
-
-        room = ""
-        for key in ["회의실 예약", "회의실", "장소"]:
-            if key in props:
-                room = extract_text(props[key])
-                break
-
-        result[page_id] = {
-            "title": title,
-            "time": time_str,
-            "date": date_label,
-            "room": room,
-            "start_raw": start_str or "",
-            "end_raw": end_str or "",
-            "created_time": page.get("created_time", ""),
-            "edited_time": page.get("last_edited_time", ""),
-            "page_id": page_id,
-        }
-
-    return result
-
-
-async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
-    """
-    내 일정만 list로 반환.
-    /today, /tomorrow 에서 사용.
-    fetch_my_cards_today를 재활용해 dict → list 변환.
-    """
-    cards = await fetch_my_cards_today(target, my_notion_user_id)
-    return sorted(cards.values(), key=_sort_key)
-
-
-# ─── 전체 일정 조회 (아침 8시, /date, 등록 직후용) ───────────────────
-
-async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     try:
-        pages = await _query_pages(target)
+        data = await fetch_schedule(target, user["notion_user_id"])
+        message = format_schedule_message(target, data)
+        await loading_msg.edit_text(message, parse_mode="MarkdownV2")
+
     except Exception as e:
-        print(f"[Notion API 오류] {e}")
-        return {
-            "vacation": {"휴가": [], "오전반차": [], "오후반차": []},
-            "business_trip": [],
-            "outside_work": [],
-            "my_cards": []
+        logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
+        await loading_msg.edit_text(
+            "⚠️ 일정을 불러오지 못했어요\\.\n\n"
+            "• 잠시 후 다시 시도해주세요\n"
+            "• 계속 문제가 생기면 관리자에게 문의해주세요",
+            parse_mode="MarkdownV2",
+        )
+
+
+# ─── 스케줄러: 매일 오전 8시 월~금 ───────────────────────────────────
+
+async def scheduled_daily(app):
+    users = list_users()
+
+    if not users:
+        logger.warning("[스케줄러] 등록된 유저 없음")
+        return
+
+    from schedule_monitor import refresh_baseline, _monitor_lock
+    from notion_helper import notion as notion_client
+
+    target = get_target_date(0)
+
+    async with _monitor_lock:
+        for telegram_id, user_info in users.items():
+            telegram_id = str(telegram_id)
+
+            try:
+                data = await fetch_schedule(target, user_info["notion_user_id"])
+                message = format_schedule_message(target, data)
+
+                await app.bot.send_message(
+                    chat_id=int(telegram_id),
+                    text=message,
+                    parse_mode="MarkdownV2",
+                )
+
+                try:
+                    await refresh_baseline(
+                        app,
+                        notion_client,
+                        os.environ["NOTION_DATABASE_ID"],
+                        telegram_id,
+                        user_info,
+                    )
+                except Exception as e:
+                    logger.error(f"[스케줄러] {telegram_id} baseline 갱신 실패: {e}")
+                    # refresh_baseline 실패 시 _prev_state를 초기화해
+                    # 다음 폴링에서 첫 실행으로 처리되도록 함
+                    from schedule_monitor import _prev_state, _prev_state_date
+                    _prev_state.pop(telegram_id, None)
+                    _prev_state_date.pop(telegram_id, None)
+
+                logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료")
+
+            except Exception as e:
+                try:
+                    await app.bot.send_message(
+                        chat_id=int(telegram_id),
+                        text="⚠️ 일정 발송 중 오류가 발생했어요\\!\n`/start` 로 상태 확인해주세요\\.",
+                        parse_mode="MarkdownV2",
+                    )
+                except Exception:
+                    pass
+                logger.error(f"[스케줄러] {telegram_id} 발송 실패: {e}")
+
+
+# ─── 모니터: 3분마다 일정 변경 감지 ─────────────────────────────────
+
+async def run_monitor(app):
+    from notion_helper import notion as notion_client
+
+    users = list_users()
+
+    await check_and_notify(
+        app,
+        notion_client,
+        os.environ["NOTION_DATABASE_ID"],
+        users,
+    )
+
+
+# ─── /start ──────────────────────────────────────────────────────────
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
+
+    if not user:
+        await update.message.reply_text(
+            "안녕하세요\\! 전사 일정 봇이에요 👋\n\n"
+            "✓ 평일 오전 8시 오늘 일정 안내\n"
+            "✓ 일정 추가/변경 시 실시간 알림\n"
+            "✓ 일정 시작 5분 전 미리 알림\n\n"
+            f"{MSG_ENTER_NAME}",
+            parse_mode="MarkdownV2",
+        )
+        return WAITING_NAME_FROM_START
+
+    name = escape_md(user['notion_name'])
+    await update.message.reply_text(
+        f"안녕하세요\\! 전사 일정 봇이에요 👋\n"
+        f"상태: ✅ 등록됨: *{name}*\n\n"
+        f"✓ 평일 오전 8시 오늘 일정 안내\n"
+        f"✓ 일정 추가/변경 시 실시간 알림\n"
+        f"✓ 일정 시작 5분 전 미리 알림\n\n"
+        f"*사용법*\n"
+        f"`/left` \\- 오늘 남은 일정\n"
+        f"`/today` \\- 오늘 내 일정\n"
+        f"`/tomorrow` \\- 내일 내 일정\n"
+        f"`/date` \\- 특정 날짜 전체 일정\n"
+        f"`/register` \\- 노션 이름으로 등록",
+        parse_mode="MarkdownV2",
+    )
+
+    return ConversationHandler.END
+
+
+async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip()
+    telegram_id = update.effective_chat.id
+
+    await update.message.reply_text(
+        f"🔍 노션에서 *{escape_md(name)}* 찾는 중\.\.\.",
+        parse_mode="MarkdownV2",
+    )
+
+    notion_user, success = await find_notion_user_by_name(name)
+
+    if not success:
+        await update.message.reply_text(
+            "⚠️ 노션 연결에 문제가 생겼어요\\. 잠시 후 다시 시도해주세요\\.",
+            parse_mode="MarkdownV2",
+        )
+        return WAITING_NAME_FROM_START
+
+    if not notion_user:
+        await update.message.reply_text(
+            f"❌ 노션 워크스페이스에서 *{escape_md(name)}* 을 찾을 수 없어요\\.\n\n"
+            f"• 노션에 표시되는 정확한 이름인지 확인해주세요\n"
+            f"• 통합\\(Integration\\)이 워크스페이스에 초대돼 있는지 확인해주세요\n\n"
+            f"다시 이름을 입력해주세요 😊",
+            parse_mode="MarkdownV2",
+        )
+        return WAITING_NAME_FROM_START
+
+    register_user(telegram_id, notion_user["id"], notion_user["name"])
+
+    await update.message.reply_text(
+        f"✅ 등록 완료\\!\n"
+        f"이름: *{escape_md(notion_user['name'])}*\n\n"
+        f"오늘 일정을 바로 불러올게요\\! 🗓",
+        parse_mode="MarkdownV2",
+    )
+
+    logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
+
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+
+    try:
+        target = get_target_date(0)
+        data = await fetch_schedule(target, notion_user["id"])
+        message = format_schedule_message(target, data)
+
+        await loading_msg.edit_text(message, parse_mode="MarkdownV2")
+
+        from notion_helper import notion as notion_client
+        from schedule_monitor import refresh_baseline
+
+        user_info = {
+            "notion_user_id": notion_user["id"],
+            "notion_name": notion_user["name"],
         }
 
-    vacation_result = {"휴가": [], "오전반차": [], "오후반차": []}
-    business_trip = []
-    outside_work = []
-    my_cards = []
+        await refresh_baseline(
+            context.application,
+            notion_client,
+            os.environ["NOTION_DATABASE_ID"],
+            str(telegram_id),
+            user_info,
+        )
 
-    for page in pages:
-        props = page.get("properties", {})
+    except Exception as e:
+        logger.error(f"[등록 후 일정 조회 실패] {e}")
+        await loading_msg.edit_text(
+            "⚠️ 일정을 불러오지 못했어요\\.\n잠시 후 `/today` 로 다시 시도해주세요\\.",
+            parse_mode="MarkdownV2",
+        )
 
-        date_prop = None
-        for key in ["기간", "날짜", "Date", "date", "일정"]:
-            if key in props:
-                date_prop = props[key]
-                break
-        if date_prop is None:
-            continue
+    return ConversationHandler.END
 
-        start_str, end_str = extract_date_range(date_prop)
-        if not is_card_on_date(start_str, end_str, target):
-            continue
 
-        title = ""
-        for key in ["Name", "이름", "name", "제목", "Title"]:
-            if key in props:
-                title = extract_text(props[key])
-                break
+# ─── /register 대화 ──────────────────────────────────────────────────
 
-        category = ""
-        for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
-            if key in props:
-                category = extract_text(props[key])
-                break
+async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        MSG_ENTER_NAME,
+        parse_mode="MarkdownV2",
+    )
+    return WAITING_NAME
 
-        pid = page.get("id", "")
 
-        if "휴가" in category:
-            assignees = _get_assignees(props)
-            if "[오전반차]" in title:
-                vacation_type = "오전반차"
-            elif "[오후반차]" in title:
-                vacation_type = "오후반차"
-            else:
-                vacation_type = "휴가"
-            vacation_result[vacation_type].extend(assignees)
+async def register_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip()
+    telegram_id = update.effective_chat.id
 
-        elif "출장" in category or "설치" in category or "외근" in category:
-            assignees = _get_assignees(props)
-            start_val, start_has_time = parse_datetime_str(start_str)
-            end_val, end_has_time = parse_datetime_str(end_str)
+    await update.message.reply_text(
+        f"🔍 노션에서 *{escape_md(name)}* 찾는 중\.\.\.",
+        parse_mode="MarkdownV2",
+    )
 
-            start_date = start_val.date() if hasattr(start_val, "date") else start_val
-            end_date = (
-                end_val.date() if hasattr(end_val, "date") else end_val
-                if end_val else start_date
-            )
+    notion_user, success = await find_notion_user_by_name(name)
 
-            if end_date and start_date != end_date:
-                date_label = f"{format_short_date(start_date)} ~ {format_short_date(end_date)}"
-                business_trip.append({"names": assignees, "date": date_label, "start_raw": start_str or ""})
-                if _is_my_card(props, my_notion_user_id):
-                    my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
+    if not success:
+        await update.message.reply_text(
+            "⚠️ 노션 연결에 문제가 생겼어요\\. 잠시 후 다시 시도해주세요\\.",
+            parse_mode="MarkdownV2",
+        )
+        return WAITING_NAME
 
-            elif start_has_time and start_val:
-                t_start = start_val.strftime("%H:%M")
-                time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}" if end_has_time and end_val else t_start
-                outside_work.append({"names": assignees, "time": time_str, "time_raw": start_str or ""})
-                if _is_my_card(props, my_notion_user_id):
-                    my_cards.append({"title": title, "time": time_str, "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
+    if not notion_user:
+        await update.message.reply_text(
+            f"❌ 노션 워크스페이스에서 *{escape_md(name)}* 을 찾을 수 없어요\\.\n\n"
+            f"• 노션에 표시되는 정확한 이름인지 확인해주세요\n"
+            f"• 통합\\(Integration\\)이 워크스페이스에 초대돼 있는지 확인해주세요\n\n"
+            f"다시 이름을 입력해주세요 😊",
+            parse_mode="MarkdownV2",
+        )
+        return WAITING_NAME
 
-            else:
-                if end_val:
-                    date_label = format_short_date(start_date) if start_date == end_date else f"{format_short_date(start_date)} ~ {format_short_date(end_date)}"
-                    business_trip.append({"names": assignees, "date": date_label, "start_raw": start_str or ""})
-                    if _is_my_card(props, my_notion_user_id):
-                        my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
-                else:
-                    outside_work.append({"names": assignees, "time": "종일", "time_raw": start_str or ""})
-                    if _is_my_card(props, my_notion_user_id):
-                        my_cards.append({"title": title, "time": "종일", "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
+    register_user(telegram_id, notion_user["id"], notion_user["name"])
 
-        else:
-            if _is_my_card(props, my_notion_user_id):
-                time_str, date_label, _ = _build_time_and_date(start_str, end_str)
-                room = ""
-                for key in ["회의실 예약", "회의실", "장소"]:
-                    if key in props:
-                        room = extract_text(props[key])
-                        break
-                my_cards.append({"title": title, "time": time_str, "date": date_label, "room": room, "is_trip": False, "start_raw": start_str or "", "page_id": pid})
+    await update.message.reply_text(
+        f"✅ 등록 완료\\!\n"
+        f"이름: *{escape_md(notion_user['name'])}*\n\n"
+        f"오늘 일정을 바로 불러올게요\\! 🗓",
+        parse_mode="MarkdownV2",
+    )
 
-    my_cards.sort(key=_sort_key)
-    vacation_result["휴가"].sort()
-    vacation_result["오전반차"].sort()
-    vacation_result["오후반차"].sort()
-    business_trip.sort(key=lambda x: x["start_raw"])
-    outside_work.sort(key=lambda x: "00:00" if not x["time_raw"] else x["time_raw"])
+    logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    return {
-        "vacation": vacation_result,
-        "business_trip": business_trip,
-        "outside_work": outside_work,
-        "my_cards": my_cards
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+
+    try:
+        target = get_target_date(0)
+        data = await fetch_schedule(target, notion_user["id"])
+        message = format_schedule_message(target, data)
+
+        await loading_msg.edit_text(message, parse_mode="MarkdownV2")
+
+        from notion_helper import notion as notion_client
+        from schedule_monitor import refresh_baseline
+
+        user_info = {
+            "notion_user_id": notion_user["id"],
+            "notion_name": notion_user["name"],
+        }
+
+        await refresh_baseline(
+            context.application,
+            notion_client,
+            os.environ["NOTION_DATABASE_ID"],
+            str(telegram_id),
+            user_info,
+        )
+
+    except Exception as e:
+        logger.error(f"[등록 후 일정 조회 실패] {e}")
+        await loading_msg.edit_text(
+            "⚠️ 일정을 불러오지 못했어요\\.\n잠시 후 `/today` 로 다시 시도해주세요\\.",
+            parse_mode="MarkdownV2",
+        )
+
+    return ConversationHandler.END
+
+
+# ─── /date 대화 ──────────────────────────────────────────────────────
+
+async def cmd_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "조회할 날짜를 입력해주세요\\!\n예: `2024\\-01\\-15`",
+        parse_mode="MarkdownV2",
+    )
+    return WAITING_DATE
+
+
+async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
+
+    if not user:
+        await update.message.reply_text(
+            "먼저 `/register` 로 등록해주세요\\!",
+            parse_mode="MarkdownV2",
+        )
+        return ConversationHandler.END
+
+    try:
+        d = date.fromisoformat(update.message.text.strip())
+        await send_full_schedule(update, context, d)
+
+    except ValueError:
+        await update.message.reply_text(
+            "`YYYY\\-MM\\-DD` 형식으로 입력해주세요\\!\n"
+            "예: `2024\\-01\\-15`\n\n"
+            "다시 시도하려면 `/date`",
+            parse_mode="MarkdownV2",
+        )
+
+    return ConversationHandler.END
+
+
+# ─── 기타 커맨드 ─────────────────────────────────────────────────────
+
+async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_my_schedule(update, context, offset=0)
+
+
+async def cmd_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_my_schedule(update, context, offset=1)
+
+
+async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
+
+    if not user:
+        await update.message.reply_text(
+            "❗ 아직 등록이 안 됐어요\\!\n`/register` 로 등록해주세요\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    from notion_helper import notion as notion_client
+    from schedule_monitor import refresh_baseline, _format_remaining_cards
+
+    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+
+    try:
+        current = await refresh_baseline(
+            context.application,
+            notion_client,
+            os.environ["NOTION_DATABASE_ID"],
+            str(telegram_id),
+            user,
+        )
+
+        body = _format_remaining_cards(current)
+        message = f"📅 *오늘 남은 일정*\n{body}"
+
+        await loading_msg.edit_text(message, parse_mode="MarkdownV2")
+
+    except Exception as e:
+        logger.error(f"[/left 실패] {telegram_id}: {e}")
+        await loading_msg.edit_text(
+            "⚠️ 업데이트 중 오류가 발생했어요\\. 잠시 후 다시 시도해주세요\\.",
+            parse_mode="MarkdownV2",
+        )
+
+
+# ─── 메인 ────────────────────────────────────────────────────────────
+
+def _validate_env():
+    required = {
+        "TELEGRAM_TOKEN": "텔레그램 봇 토큰",
+        "NOTION_TOKEN": "노션 API 토큰",
+        "NOTION_DATABASE_ID": "노션 데이터베이스 ID",
     }
+    optional = {
+        "GOOGLE_SHEETS_ID": "구글 시트 ID",
+        "GOOGLE_CREDENTIALS": "구글 서비스 계정 크리덴셜",
+    }
+    missing = [f"{key} ({desc})" for key, desc in required.items() if not os.environ.get(key)]
+    if missing:
+        raise EnvironmentError(
+            "필수 환경변수가 설정되지 않았어요:\n" +
+            "\n".join(f"  - {m}" for m in missing)
+        )
+    missing_optional = [f"{key} ({desc})" for key, desc in optional.items() if not os.environ.get(key)]
+    if missing_optional:
+        logger.warning(
+            "선택 환경변수가 없어요 (Google Sheets 백업 비활성화):\n" +
+            "\n".join(f"  - {m}" for m in missing_optional)
+        )
 
 
-# ─── 메시지 포맷 ──────────────────────────────────────────────────────
+def main():
+    _validate_env()
 
-def _fmt_card_line(card: dict) -> str:
-    title = _card_title_link(card)
-    room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
-    if card.get("time"):
-        return f"  • `{card['time']}` {title}{room_part}"
-    return f"  • {title}{room_part}"
+    from user_store import restore_from_sheets
+
+    restore_from_sheets()
+
+    async def post_init(app):
+        asyncio.create_task(run_monitor(app))
+
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+
+    start_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", cmd_start)],
+        states={
+            WAITING_NAME_FROM_START: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, start_name_received)
+            ]
+        },
+        fallbacks=[
+            MessageHandler(
+                filters.ALL,
+                lambda u, c: u.message.reply_text(MSG_ENTER_NAME)
+            )
+        ],
+    )
+
+    register_handler = ConversationHandler(
+        entry_points=[CommandHandler("register", cmd_register)],
+        states={
+            WAITING_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, register_name_received)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("start", cmd_start),
+            MessageHandler(
+                filters.ALL,
+                lambda u, c: u.message.reply_text(MSG_ENTER_NAME)
+            ),
+        ],
+    )
+
+    date_handler = ConversationHandler(
+        entry_points=[CommandHandler("date", cmd_date)],
+        states={
+            WAITING_DATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, date_received)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("start", cmd_start),
+            CommandHandler("today", cmd_today),
+            CommandHandler("tomorrow", cmd_tomorrow),
+            CommandHandler("left", cmd_left),
+            CommandHandler("date", cmd_date),
+            CommandHandler("register", cmd_register),
+        ],
+    )
+
+    app.add_handler(start_handler)
+    app.add_handler(register_handler)
+    app.add_handler(date_handler)
+
+    app.add_handler(CommandHandler("today", cmd_today))
+    app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
+    app.add_handler(CommandHandler("left", cmd_left))
+
+    scheduler = AsyncIOScheduler(timezone=KST)
+
+    scheduler.add_job(
+        scheduled_daily,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=0,
+        args=[app],
+        id="daily_schedule",
+    )
+
+    scheduler.add_job(
+        run_monitor,
+        trigger="cron",
+        minute="0,3,6,9,12,15,18,21,24,27,30,33,36,39,42,45,48,51,54,57",
+        args=[app],
+        id="schedule_monitor",
+    )
+
+    scheduler.start()
+
+    from schedule_monitor import set_scheduler
+    set_scheduler(scheduler)
+
+    logger.info("스케줄러 시작 (매일 오전 8시 KST, 월~금 / 3분마다 일정 모니터링)")
+    logger.info("봇 시작!")
+
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
-def format_my_schedule_message(target: date, cards: list) -> str:
-    date_str = escape_md(format_date_korean(target))
-    lines = [f"📅 *{date_str} 내 일정*"]
-
-    if cards:
-        for card in cards:
-            lines.append(_fmt_card_line(card))
-    else:
-        lines.append("  • 등록된 일정이 없어요\\!")
-
-    return "\n".join(lines)
-
-
-def format_schedule_message(target: date, data: dict) -> str:
-    date_str = escape_md(format_date_korean(target))
-    lines = [f"📅 *{date_str} 일정*\n"]
-
-    vacation = data["vacation"]
-    has_vacation = any(vacation.values())
-
-    if has_vacation:
-        lines.append("🏖 *휴가/반차*")
-        if vacation["휴가"]:
-            lines.append(f"  • 휴가: {', '.join(escape_md(n) for n in vacation['휴가'])}")
-        if vacation["오전반차"]:
-            lines.append(f"  • 오전반차: {', '.join(escape_md(n) for n in vacation['오전반차'])}")
-        if vacation["오후반차"]:
-            lines.append(f"  • 오후반차: {', '.join(escape_md(n) for n in vacation['오후반차'])}")
-        lines.append("")
-
-    business_trip = data.get("business_trip", [])
-    if business_trip:
-        lines.append("✈️ *출장*")
-        for item in business_trip:
-            names = ", ".join(escape_md(n) for n in item["names"])
-            lines.append(f"  • {escape_md(item['date'])} {names}")
-        lines.append("")
-
-    outside_work = data.get("outside_work", [])
-    if outside_work:
-        lines.append("🚗 *외근*")
-        for item in outside_work:
-            names = ", ".join(escape_md(n) for n in item["names"])
-            lines.append(f"  • `{item['time']}` {names}")
-        lines.append("")
-
-    my_cards = data["my_cards"]
-    if my_cards:
-        lines.append("📌 *내 일정*")
-        for card in my_cards:
-            lines.append(_fmt_card_line(card))
-        lines.append("")
-    else:
-        lines.append("📌 *내 일정*")
-        lines.append("  • 등록된 일정이 없어요\\!")
-        lines.append("")
-
-    return "\n".join(lines)
+if __name__ == "__main__":
+    main()

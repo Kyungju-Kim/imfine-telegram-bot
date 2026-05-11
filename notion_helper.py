@@ -1,3 +1,4 @@
+import asyncio
 from notion_client import AsyncClient
 from datetime import datetime, date, timedelta
 import os
@@ -7,6 +8,7 @@ KST = pytz.timezone("Asia/Seoul")
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 LONG_RANGE_DAYS = 30
+NOTION_TIMEOUT = 10  # 초
 
 notion = AsyncClient(auth=NOTION_TOKEN)
 
@@ -114,20 +116,26 @@ def format_short_date(d) -> str:
 
 # ─── Notion 유저 검색 ─────────────────────────────────────────────────
 
-async def find_notion_user_by_name(name: str) -> dict | None:
+async def find_notion_user_by_name(name: str) -> tuple[dict | None, bool]:
+    """
+    Returns (user, success)
+    - (user_dict, True): 찾음
+    - (None, True): 못 찾음 (API는 정상)
+    - (None, False): API 오류
+    """
     try:
         response = await notion.users.list()
         users = response.get("results", [])
         for user in users:
             if user.get("name") == name:
-                return {"id": user["id"], "name": user["name"]}
+                return {"id": user["id"], "name": user["name"]}, True
         for user in users:
             if name in user.get("name", ""):
-                return {"id": user["id"], "name": user["name"]}
-        return None
+                return {"id": user["id"], "name": user["name"]}, True
+        return None, True
     except Exception as e:
         print(f"[Notion 유저 검색 오류] {e}")
-        return None
+        return None, False
 
 
 # ─── 공통: DB 페이지 조회 ────────────────────────────────────────────
@@ -163,7 +171,10 @@ async def _query_pages(target: date, long_range_days: int = LONG_RANGE_DAYS) -> 
         if next_cursor:
             kwargs["start_cursor"] = next_cursor
 
-        response = await notion.databases.query(**kwargs)
+        response = await asyncio.wait_for(
+            notion.databases.query(**kwargs),
+            timeout=NOTION_TIMEOUT,
+        )
         pages.extend(response.get("results", []))
         has_more = response.get("has_more", False)
         next_cursor = response.get("next_cursor")
@@ -229,33 +240,103 @@ def _card_title_link(card: dict) -> str:
     return escape_md(card.get("title") or "(제목 없음)")
 
 
-# ─── 내 일정만 조회 (/today, /tomorrow용) ────────────────────────────
+def _sort_key(card: dict) -> str:
+    raw = card.get("start_raw", "")
+    if not raw:
+        return "9999"
+    if "T" not in raw:
+        return raw + "T00:00"
+    return raw
 
-async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
-    try:
+
+# ─── 내 카드 조회 (통합) ─────────────────────────────────────────────
+
+async def fetch_my_cards_today(
+    target: date,
+    my_notion_user_id: str,
+    notion_client=None,
+    database_id: str = None,
+) -> dict:
+    """
+    오늘 내 카드를 dict[page_id, card]로 반환.
+    폴링/변경감지/5분전알림/refresh_baseline 에서 사용.
+
+    notion_client, database_id 는 schedule_monitor에서 호출할 때만 전달.
+    미전달 시 모듈 레벨 notion / DATABASE_ID 사용.
+    """
+    client = notion_client or notion
+    db_id = database_id or DATABASE_ID
+
+    # schedule_monitor는 자체 쿼리, notion_helper는 _query_pages 재사용
+    if notion_client:
+        # schedule_monitor에서 직접 호출 시 - 자체 쿼리
+        long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
+        pages = []
+        has_more = True
+        next_cursor = None
+
+        while has_more:
+            kwargs = {
+                "database_id": db_id,
+                "filter": {
+                    "or": [
+                        {
+                            "and": [
+                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
+                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
+                            ]
+                        },
+                        {
+                            "and": [
+                                {"property": "기간", "date": {"on_or_after": long_range_start}},
+                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
+                            ]
+                        },
+                    ]
+                },
+                "page_size": 100,
+            }
+            if next_cursor:
+                kwargs["start_cursor"] = next_cursor
+
+            response = await asyncio.wait_for(
+                client.databases.query(**kwargs),
+                timeout=NOTION_TIMEOUT,
+            )
+            pages.extend(response.get("results", []))
+            has_more = response.get("has_more", False)
+            next_cursor = response.get("next_cursor")
+    else:
         pages = await _query_pages(target)
-    except Exception as e:
-        print(f"[Notion API 오류] {e}")
-        return []
 
-    my_cards = []
+    result = {}
+    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
 
     for page in pages:
         props = page.get("properties", {})
+        page_id = page["id"]
+
+        is_mine = False
+        for key in check_keys:
+            if key in props:
+                people = [p.get("id", "") for p in props[key].get("people", [])]
+                if my_notion_user_id in people:
+                    is_mine = True
+                    break
+
+        if not is_mine:
+            continue
 
         date_prop = None
         for key in ["기간", "날짜", "Date", "date", "일정"]:
             if key in props:
                 date_prop = props[key]
                 break
-        if date_prop is None:
+        if not date_prop:
             continue
 
         start_str, end_str = extract_date_range(date_prop)
         if not is_card_on_date(start_str, end_str, target):
-            continue
-
-        if not _is_my_card(props, my_notion_user_id):
             continue
 
         category = ""
@@ -281,26 +362,29 @@ async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
                 room = extract_text(props[key])
                 break
 
-        my_cards.append({
+        result[page_id] = {
             "title": title,
             "time": time_str,
             "date": date_label,
             "room": room,
-            "is_trip": "출장" in category or "설치" in category or "외근" in category,
             "start_raw": start_str or "",
-            "page_id": page.get("id", ""),
-        })
+            "end_raw": end_str or "",
+            "created_time": page.get("created_time", ""),
+            "edited_time": page.get("last_edited_time", ""),
+            "page_id": page_id,
+        }
 
-    def sort_key(x):
-        raw = x.get("start_raw", "")
-        if not raw:
-            return "9999"
-        if "T" not in raw:
-            return raw + "T00:00"
-        return raw
+    return result
 
-    my_cards.sort(key=sort_key)
-    return my_cards
+
+async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
+    """
+    내 일정만 list로 반환.
+    /today, /tomorrow 에서 사용.
+    fetch_my_cards_today를 재활용해 dict → list 변환.
+    """
+    cards = await fetch_my_cards_today(target, my_notion_user_id)
+    return sorted(cards.values(), key=_sort_key)
 
 
 # ─── 전체 일정 조회 (아침 8시, /date, 등록 직후용) ───────────────────
@@ -406,20 +490,12 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                         break
                 my_cards.append({"title": title, "time": time_str, "date": date_label, "room": room, "is_trip": False, "start_raw": start_str or "", "page_id": pid})
 
-    def my_card_sort_key(x):
-        raw = x.get("start_raw", "")
-        if not raw:
-            return "9999"
-        if "T" not in raw:
-            return raw + "T00:00"
-        return raw
-
-    my_cards.sort(key=my_card_sort_key)
+    my_cards.sort(key=_sort_key)
     vacation_result["휴가"].sort()
     vacation_result["오전반차"].sort()
     vacation_result["오후반차"].sort()
     business_trip.sort(key=lambda x: x["start_raw"])
-    outside_work.sort(key=lambda x: x["time_raw"] if x["time_raw"] else "99:99")
+    outside_work.sort(key=lambda x: "00:00" if not x["time_raw"] else x["time_raw"])
 
     return {
         "vacation": vacation_result,

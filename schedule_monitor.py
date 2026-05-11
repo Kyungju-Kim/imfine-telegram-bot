@@ -21,7 +21,7 @@ DEBUG_MODE = (
 )
 
 _prev_state: dict[str, dict] = {}
-_prev_state_date: dict[str, date] = {}  # 유저별 마지막 갱신 날짜
+_prev_state_date: dict[str, date] = {}
 _scheduler = None
 _monitor_lock = asyncio.Lock()
 
@@ -190,7 +190,6 @@ def _format_remaining_cards(cards: dict) -> str:
     from notion_helper import escape_md, parse_datetime_str, _card_title_link
 
     now = datetime.now(KST)
-
     remaining = []
     no_time = []
 
@@ -211,7 +210,6 @@ def _format_remaining_cards(cards: dict) -> str:
     remaining.sort(key=lambda x: x[1].get("start_raw") or "")
 
     lines = []
-
     for page_id, card in remaining + no_time:
         title = _card_title_link(card)
         room_part = f" 📍 {escape_md(card['room'])}" if card.get("room") else ""
@@ -309,7 +307,6 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
 
                 if prev is None:
                     _prev_state[telegram_id] = _make_state(current)
-                _prev_state_date[telegram_id] = today
                     _prev_state_date[telegram_id] = today
                     register_all_reminders(app, notion_client, database_id, telegram_id, notion_user_id, current)
                     continue
@@ -324,8 +321,6 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                     elif prev[page_id]["edited_time"] != card["edited_time"]:
                         changed_ids.append(page_id)
 
-                _prev_state[telegram_id] = _make_state(current)
-
                 for page_id in new_ids:
                     _register_reminder(app, notion_client, database_id, telegram_id, notion_user_id, page_id, current[page_id])
                 for page_id in changed_ids:
@@ -334,6 +329,8 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                     _remove_reminder(telegram_id, page_id)
 
                 if not new_ids and not changed_ids and not deleted_ids:
+                    _prev_state[telegram_id] = _make_state(current)
+                    _prev_state_date[telegram_id] = today
                     continue
 
                 from notion_helper import escape_md

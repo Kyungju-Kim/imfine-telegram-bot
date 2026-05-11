@@ -41,6 +41,11 @@ WAITING_DATE = 2
 WAITING_NAME_FROM_START = 3
 
 MSG_ENTER_NAME = "노션에 등록된 이름을 입력해주세요 😊\n예: `홍길동`"
+MSG_ERROR = (
+    "⚠️ 일정을 불러오지 못했어요\\.\n\n"
+    "• 잠시 후 다시 시도해주세요\n"
+    "• 계속 문제가 생기면 관리자에게 문의해주세요"
+)
 
 _user_tasks: dict[int, asyncio.Task] = {}
 
@@ -94,12 +99,7 @@ async def send_my_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, o
         except Exception as e:
             logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
             try:
-                await loading_msg.edit_text(
-                    "⚠️ 일정을 불러오지 못했어요\\.\n\n"
-                    "• 잠시 후 다시 시도해주세요\n"
-                    "• 계속 문제가 생기면 관리자에게 문의해주세요",
-                    parse_mode="MarkdownV2",
-                )
+                await loading_msg.edit_text(MSG_ERROR, parse_mode="MarkdownV2")
             except Exception:
                 pass
 
@@ -129,12 +129,7 @@ async def send_full_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     except Exception as e:
         logger.error(f"[일정 조회 실패] {telegram_id}: {e}")
-        await loading_msg.edit_text(
-            "⚠️ 일정을 불러오지 못했어요\\.\n\n"
-            "• 잠시 후 다시 시도해주세요\n"
-            "• 계속 문제가 생기면 관리자에게 문의해주세요",
-            parse_mode="MarkdownV2",
-        )
+        await loading_msg.edit_text(MSG_ERROR, parse_mode="MarkdownV2")
 
 
 # ─── 스케줄러: 매일 오전 8시 월~금 ───────────────────────────────────
@@ -482,10 +477,7 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"[/left 실패] {telegram_id}: {e}")
-        await loading_msg.edit_text(
-            "⚠️ 업데이트 중 오류가 발생했어요\\. 잠시 후 다시 시도해주세요\\.",
-            parse_mode="MarkdownV2",
-        )
+        await loading_msg.edit_text(MSG_ERROR, parse_mode="MarkdownV2")
 
 
 async def _ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):

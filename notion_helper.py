@@ -34,10 +34,15 @@ def escape_md(text: str) -> str:
 
 
 def escape_md_link_text(text: str) -> str:
-    """링크 텍스트용 이스케이프 ([] 만 처리)"""
+    """링크 텍스트용 이스케이프"""
     if not text:
         return ""
-    return text.replace('\\', '\\\\').replace('[', '\\[').replace(']', '\\]')
+    # 백슬래시 먼저 처리
+    text = text.replace('\\', '\\\\')
+    # 링크 텍스트 안에서 의미있는 MarkdownV2 특수문자
+    for char in ['[', ']', '(', ')', '*', '_', '`', '~']:
+        text = text.replace(char, f'\\{char}')
+    return text
 
 
 # ─── 속성 추출 ────────────────────────────────────────────────────────

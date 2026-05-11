@@ -488,6 +488,16 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def _ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(MSG_ENTER_NAME)
+    return WAITING_NAME_FROM_START
+
+
+async def _ask_name_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(MSG_ENTER_NAME)
+    return WAITING_NAME
+
+
 # ─── 메인 ────────────────────────────────────────────────────────────
 
 def _validate_env():
@@ -534,10 +544,7 @@ def main():
             ]
         },
         fallbacks=[
-            MessageHandler(
-                filters.ALL,
-                lambda u, c: u.message.reply_text(MSG_ENTER_NAME)
-            )
+            MessageHandler(filters.ALL, _ask_name)
         ],
     )
 
@@ -550,10 +557,7 @@ def main():
         },
         fallbacks=[
             CommandHandler("start", cmd_start),
-            MessageHandler(
-                filters.ALL,
-                lambda u, c: u.message.reply_text(MSG_ENTER_NAME)
-            ),
+            MessageHandler(filters.ALL, _ask_name_register),
         ],
     )
 

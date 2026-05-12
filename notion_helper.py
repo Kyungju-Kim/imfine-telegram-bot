@@ -12,6 +12,35 @@ NOTION_TIMEOUT = 10  # 초
 
 notion = AsyncClient(auth=NOTION_TOKEN)
 
+# 휴가/전사일정 제외 카테고리
+EXCLUDED_CATEGORIES = {
+    "휴가", "조기퇴근", "공휴일",
+    "세미나", "플레이샵", "신규입사", "OKR Party", "복직", "강의",
+}
+
+# 출장/외근 카테고리
+TRIP_CATEGORIES = {
+    "출장", "설치", "외근", "FineDay", "전시참관",
+    "전시", "영업", "철거", "현장실사", "워크샵",
+}
+
+# 전사 일정 카테고리
+COMPANY_EVENT_CATEGORIES = {
+    "세미나", "플레이샵", "신규입사", "OKR Party", "복직", "강의",
+}
+
+
+def _is_excluded(category: str) -> bool:
+    return any(c in category for c in EXCLUDED_CATEGORIES)
+
+
+def _is_trip(category: str) -> bool:
+    return any(c in category for c in TRIP_CATEGORIES)
+
+
+def _is_company_event(category: str) -> bool:
+    return any(c in category for c in COMPANY_EVENT_CATEGORIES)
+
 
 # ─── 날짜 유틸 ────────────────────────────────────────────────────────
 
@@ -37,9 +66,7 @@ def escape_md_link_text(text: str) -> str:
     """링크 텍스트용 이스케이프"""
     if not text:
         return ""
-    # 백슬래시 먼저 처리
     text = text.replace('\\', '\\\\')
-    # 링크 텍스트 안에서 의미있는 MarkdownV2 특수문자
     for char in ['[', ']', '(', ')', '*', '_', '`', '~']:
         text = text.replace(char, f'\\{char}')
     return text
@@ -122,12 +149,6 @@ def format_short_date(d) -> str:
 # ─── Notion 유저 검색 ─────────────────────────────────────────────────
 
 async def find_notion_user_by_name(name: str) -> tuple[dict | None, bool]:
-    """
-    Returns (user, success)
-    - (user_dict, True): 찾음
-    - (None, True): 못 찾음 (API는 정상)
-    - (None, False): API 오류
-    """
     try:
         response = await notion.users.list()
         users = response.get("results", [])
@@ -262,19 +283,10 @@ async def fetch_my_cards_today(
     notion_client=None,
     database_id: str = None,
 ) -> dict:
-    """
-    오늘 내 카드를 dict[page_id, card]로 반환.
-    폴링/변경감지/5분전알림/refresh_baseline 에서 사용.
-
-    notion_client, database_id 는 schedule_monitor에서 호출할 때만 전달.
-    미전달 시 모듈 레벨 notion / DATABASE_ID 사용.
-    """
     client = notion_client or notion
     db_id = database_id or DATABASE_ID
 
-    # schedule_monitor는 자체 쿼리, notion_helper는 _query_pages 재사용
     if notion_client:
-        # schedule_monitor에서 직접 호출 시 - 자체 쿼리
         long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
         pages = []
         has_more = True
@@ -350,20 +362,7 @@ async def fetch_my_cards_today(
                 category = extract_text(props[key])
                 break
 
-        if "공휴일" in category:
-            vacation_result["공휴일"].append(title)
-
-        el        if (
-            "휴가" in category
-            or "조기퇴근" in category
-            or "공휴일" in category
-            or "세미나" in category
-            or "플레이샵" in category
-            or "신규입사" in category
-            or "OKR Party" in category
-            or "복직" in category
-            or "강의" in category
-        ):
+        if _is_excluded(category):
             continue
 
         title = ""
@@ -396,11 +395,6 @@ async def fetch_my_cards_today(
 
 
 async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
-    """
-    내 일정만 list로 반환.
-    /today, /tomorrow 에서 사용.
-    fetch_my_cards_today를 재활용해 dict → list 변환.
-    """
     cards = await fetch_my_cards_today(target, my_notion_user_id)
     return sorted(cards.values(), key=_sort_key)
 
@@ -413,14 +407,15 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     except Exception as e:
         print(f"[Notion API 오류] {e}")
         return {
-            "vacation": {"휴가": [], "오전반차": [], "오후반차": []},
+            "vacation": {"휴가": [], "오전반차": [], "오후반차": [], "공휴일": []},
+            "company_events": [],
             "business_trip": [],
             "outside_work": [],
             "my_cards": []
         }
 
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": [], "공휴일": []}
-    company_events = []  # 전사 일정
+    company_events = []
     business_trip = []
     outside_work = []
     my_cards = []
@@ -454,7 +449,10 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
         pid = page.get("id", "")
 
-        if "휴가" in category or "조기퇴근" in category:
+        if "공휴일" in category:
+            vacation_result["공휴일"].append(title)
+
+        elif "휴가" in category or "조기퇴근" in category:
             assignees = _get_assignees(props)
             if "[오전반차]" in title:
                 vacation_type = "오전반차"
@@ -466,11 +464,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 vacation_type = "휴가"
             vacation_result[vacation_type].extend(assignees)
 
-        elif (
-            "세미나" in category or "플레이샵" in category
-            or "신규입사" in category or "OKR Party" in category
-            or "복직" in category or "강의" in category
-        ):
+        elif _is_company_event(category):
             assignees = _get_assignees(props)
             company_events.append({
                 "title": title,
@@ -478,13 +472,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 "start_raw": start_str or "",
             })
 
-        elif (
-            "출장" in category or "설치" in category or "외근" in category
-            or "FineDay" in category or "전시참관" in category
-            or "전시" in category or "영업" in category
-            or "철거" in category or "현장실사" in category
-            or "워크샵" in category
-        ):
+        elif _is_trip(category):
             assignees = _get_assignees(props)
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)

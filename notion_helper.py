@@ -643,7 +643,7 @@ def format_schedule_message(target: date, data: dict) -> str:
         for item in business_trip:
             names = ", ".join(escape_md(n) for n in item["names"])
             title = escape_md(item["title"])
-            lines.append(f"  • {escape_md(item['date'])} {title}: {names}")
+            lines.append(f"  • {escape_md(item['date'])} {title} \\| {names}")
         lines.append("")
 
     outside_work = data.get("outside_work", [])
@@ -653,9 +653,9 @@ def format_schedule_message(target: date, data: dict) -> str:
             names = ", ".join(escape_md(n) for n in item["names"])
             title = escape_md(item["title"])
             if item["time"] == "종일":
-                lines.append(f"  • {title}: {names}")
+                lines.append(f"  • {title} \\| {names}")
             else:
-                lines.append(f"  • `{item['time']}` {title}: {names}")
+                lines.append(f"  • `{item['time']}` {title} \\| {names}")
         lines.append("")
 
     my_cards = data["my_cards"]

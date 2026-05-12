@@ -572,7 +572,7 @@ def format_schedule_message(target: date, data: dict) -> str:
             title = escape_md(item["title"])
             if item.get("time"):
                 prefix = f"`{item['time']}` "
-            elif item.get("date"):
+            elif item.get("date") and "~" in item["date"]:
                 prefix = f"{escape_md(item['date'])} "
             else:
                 prefix = ""

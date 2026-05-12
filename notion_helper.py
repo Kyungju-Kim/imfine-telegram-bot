@@ -353,7 +353,17 @@ async def fetch_my_cards_today(
         if "공휴일" in category:
             vacation_result["공휴일"].append(title)
 
-        elif "휴가" in category or "조기퇴근" in category:
+        el        if (
+            "휴가" in category
+            or "조기퇴근" in category
+            or "공휴일" in category
+            or "세미나" in category
+            or "플레이샵" in category
+            or "신규입사" in category
+            or "OKR Party" in category
+            or "복직" in category
+            or "강의" in category
+        ):
             continue
 
         title = ""

@@ -466,9 +466,12 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
         elif _is_company_event(category):
             assignees = _get_assignees(props)
+            time_str, date_label, _ = _build_time_and_date(start_str, end_str)
             company_events.append({
                 "title": title,
                 "names": assignees,
+                "time": time_str,
+                "date": date_label,
                 "start_raw": start_str or "",
             })
 
@@ -567,11 +570,17 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("🌟 *전사 일정*")
         for item in company_events:
             title = escape_md(item["title"])
+            if item.get("time"):
+                prefix = f"`{item['time']}` "
+            elif item.get("date"):
+                prefix = f"{escape_md(item['date'])} "
+            else:
+                prefix = ""
             if item["names"]:
                 names = ", ".join(escape_md(n) for n in item["names"])
-                lines.append(f"  • {title} {names}")
+                lines.append(f"  • {prefix}{title} {names}")
             else:
-                lines.append(f"  • {title}")
+                lines.append(f"  • {prefix}{title}")
         lines.append("")
 
     vacation = data["vacation"]

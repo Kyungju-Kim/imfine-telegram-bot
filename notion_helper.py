@@ -576,21 +576,10 @@ def format_my_schedule_message(target: date, cards: list) -> str:
     date_str = escape_md(format_date_korean(target))
     lines = [f"📅 *{date_str} 내 일정*"]
 
-    company = [c for c in cards if c.get("is_company_event")]
-    my = [c for c in cards if not c.get("is_company_event")]
-
-    if company:
-        lines.append("🌟 *전사 일정*")
-        for card in company:
-            lines.append(_fmt_company_event_line(card))
-        lines.append("")
-
-    if my:
-        lines.append("📌 *내 일정*")
-        for card in my:
+    if cards:
+        for card in cards:
             lines.append(_fmt_card_line(card))
     else:
-        lines.append("📌 *내 일정*")
         lines.append("  • 등록된 일정이 없어요\\!")
 
     return "\n".join(lines)

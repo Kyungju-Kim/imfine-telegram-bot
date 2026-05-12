@@ -12,10 +12,9 @@ NOTION_TIMEOUT = 10  # 초
 
 notion = AsyncClient(auth=NOTION_TOKEN)
 
-# 휴가/전사일정 제외 카테고리
+# 휴가/공휴일 제외 카테고리 (my_cards에서 완전 제외)
 EXCLUDED_CATEGORIES = {
     "휴가", "조기퇴근", "공휴일",
-    "세미나", "플레이샵", "신규입사", "OKR Party", "복직", "강의",
 }
 
 # 출장/외근 카테고리
@@ -26,7 +25,7 @@ TRIP_CATEGORIES = {
 
 # 전사 일정 카테고리
 COMPANY_EVENT_CATEGORIES = {
-    "세미나", "플레이샵", "신규입사", "OKR Party", "복직", "강의",
+    "세미나", "플레이샵", "신규입사", "OKR Party", "복직", "강의", "생일",
 }
 
 
@@ -389,6 +388,7 @@ async def fetch_my_cards_today(
             "created_time": page.get("created_time", ""),
             "edited_time": page.get("last_edited_time", ""),
             "page_id": page_id,
+            "is_company_event": _is_company_event(category),  # ← 플래그 추가
         }
 
     return result
@@ -475,6 +475,17 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 "start_raw": start_str or "",
                 "page_id": pid,
             })
+            if _is_my_card(props, my_notion_user_id):
+                my_cards.append({
+                    "title": title,
+                    "time": time_str,
+                    "date": date_label,
+                    "room": "",
+                    "is_trip": False,
+                    "is_company_event": True,
+                    "start_raw": start_str or "",
+                    "page_id": pid,
+                })
 
         elif _is_trip(category):
             assignees = _get_assignees(props)
@@ -549,14 +560,37 @@ def _fmt_card_line(card: dict) -> str:
     return f"  • {title}{room_part}"
 
 
+def _fmt_company_event_line(card: dict) -> str:
+    """전사 일정 한 줄 포맷 (시간/날짜 범위 prefix)"""
+    title = _card_title_link(card)
+    if card.get("time"):
+        prefix = f"`{card['time']}` "
+    elif card.get("date") and "~" in card["date"]:
+        prefix = f"{escape_md(card['date'])} "
+    else:
+        prefix = ""
+    return f"  • {prefix}{title}"
+
+
 def format_my_schedule_message(target: date, cards: list) -> str:
     date_str = escape_md(format_date_korean(target))
     lines = [f"📅 *{date_str} 내 일정*"]
 
-    if cards:
-        for card in cards:
+    company = [c for c in cards if c.get("is_company_event")]
+    my = [c for c in cards if not c.get("is_company_event")]
+
+    if company:
+        lines.append("🌟 *전사 일정*")
+        for card in company:
+            lines.append(_fmt_company_event_line(card))
+        lines.append("")
+
+    if my:
+        lines.append("📌 *내 일정*")
+        for card in my:
             lines.append(_fmt_card_line(card))
     else:
+        lines.append("📌 *내 일정*")
         lines.append("  • 등록된 일정이 없어요\\!")
 
     return "\n".join(lines)

@@ -407,14 +407,14 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     except Exception as e:
         print(f"[Notion API 오류] {e}")
         return {
-            "vacation": {"휴가": [], "오전반차": [], "오후반차": [], "공휴일": []},
+            "vacation": {"휴가": [], "오전반차": [], "오후반차": [], "오전반반차": [], "오후반반차": [], "공휴일": []},
             "company_events": [],
             "business_trip": [],
             "outside_work": [],
             "my_cards": []
         }
 
-    vacation_result = {"휴가": [], "오전반차": [], "오후반차": [], "공휴일": []}
+    vacation_result = {"휴가": [], "오전반차": [], "오후반차": [], "오전반반차": [], "오후반반차": [], "공휴일": []}
     company_events = []
     business_trip = []
     outside_work = []
@@ -454,7 +454,11 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
         elif "휴가" in category or "조기퇴근" in category:
             assignees = _get_assignees(props)
-            if "[오전반차]" in title:
+            if "[오전반반차]" in title:
+                vacation_type = "오전반반차"
+            elif "[오후반반차]" in title:
+                vacation_type = "오후반반차"
+            elif "[오전반차]" in title:
                 vacation_type = "오전반차"
             elif "[오후반차]" in title:
                 vacation_type = "오후반차"
@@ -536,6 +540,8 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     vacation_result["휴가"].sort()
     vacation_result["오전반차"].sort()
     vacation_result["오후반차"].sort()
+    vacation_result["오전반반차"].sort()
+    vacation_result["오후반반차"].sort()
     vacation_result["공휴일"].sort()
     company_events.sort(key=lambda x: x["start_raw"])
     business_trip.sort(key=lambda x: x["start_raw"])
@@ -616,10 +622,14 @@ def format_schedule_message(target: date, data: dict) -> str:
             lines.append(f"  • 공휴일: {', '.join(escape_md(n) for n in vacation['공휴일'])}")
         if vacation["휴가"]:
             lines.append(f"  • 휴가: {', '.join(escape_md(n) for n in vacation['휴가'])}")
+        if vacation["오전반반차"]:
+            lines.append(f"  • 오전반반차: {', '.join(escape_md(n) for n in vacation['오전반반차'])}")
         if vacation["오전반차"]:
             lines.append(f"  • 오전반차: {', '.join(escape_md(n) for n in vacation['오전반차'])}")
         if vacation["오후반차"]:
             lines.append(f"  • 오후반차: {', '.join(escape_md(n) for n in vacation['오후반차'])}")
+        if vacation["오후반반차"]:
+            lines.append(f"  • 오후반반차: {', '.join(escape_md(n) for n in vacation['오후반반차'])}")
         lines.append("")
 
     business_trip = data.get("business_trip", [])

@@ -350,7 +350,7 @@ async def fetch_my_cards_today(
                 category = extract_text(props[key])
                 break
 
-        if "휴가" in category:
+        if "휴가" in category or "조기퇴근" in category:
             continue
 
         title = ""
@@ -440,17 +440,24 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
         pid = page.get("id", "")
 
-        if "휴가" in category:
+        if "휴가" in category or "조기퇴근" in category:
             assignees = _get_assignees(props)
             if "[오전반차]" in title:
                 vacation_type = "오전반차"
             elif "[오후반차]" in title:
                 vacation_type = "오후반차"
+            elif "조기퇴근" in category:
+                vacation_type = "오후반차"
             else:
                 vacation_type = "휴가"
             vacation_result[vacation_type].extend(assignees)
 
-        elif "출장" in category or "설치" in category or "외근" in category:
+        elif (
+            "출장" in category or "설치" in category or "외근" in category
+            or "FineDay" in category or "전시참관" in category
+            or "전시" in category or "영업" in category
+            or "철거" in category or "현장실사" in category
+        ):
             assignees = _get_assignees(props)
             start_val, start_has_time = parse_datetime_str(start_str)
             end_val, end_has_time = parse_datetime_str(end_str)

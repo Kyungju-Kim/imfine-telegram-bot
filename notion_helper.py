@@ -504,25 +504,25 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
             if end_date and start_date != end_date:
                 date_label = f"{format_short_date(start_date)} ~ {format_short_date(end_date)}"
-                business_trip.append({"names": assignees, "date": date_label, "start_raw": start_str or ""})
+                business_trip.append({"title": title, "names": assignees, "date": date_label, "start_raw": start_str or ""})
                 if _is_my_card(props, my_notion_user_id):
                     my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
 
             elif start_has_time and start_val:
                 t_start = start_val.strftime("%H:%M")
                 time_str = f"{t_start} ~ {end_val.strftime('%H:%M')}" if end_has_time and end_val else t_start
-                outside_work.append({"names": assignees, "time": time_str, "time_raw": start_str or ""})
+                outside_work.append({"title": title, "names": assignees, "time": time_str, "time_raw": start_str or ""})
                 if _is_my_card(props, my_notion_user_id):
                     my_cards.append({"title": title, "time": time_str, "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
 
             else:
                 if end_val:
                     date_label = format_short_date(start_date) if start_date == end_date else f"{format_short_date(start_date)} ~ {format_short_date(end_date)}"
-                    business_trip.append({"names": assignees, "date": date_label, "start_raw": start_str or ""})
+                    business_trip.append({"title": title, "names": assignees, "date": date_label, "start_raw": start_str or ""})
                     if _is_my_card(props, my_notion_user_id):
                         my_cards.append({"title": title, "time": None, "date": date_label, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
                 else:
-                    outside_work.append({"names": assignees, "time": "종일", "time_raw": start_str or ""})
+                    outside_work.append({"title": title, "names": assignees, "time": "종일", "time_raw": start_str or ""})
                     if _is_my_card(props, my_notion_user_id):
                         my_cards.append({"title": title, "time": None, "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
 
@@ -637,7 +637,8 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("✈️ *출장*")
         for item in business_trip:
             names = ", ".join(escape_md(n) for n in item["names"])
-            lines.append(f"  • {escape_md(item['date'])} {names}")
+            title = escape_md(item["title"])
+            lines.append(f"  • {escape_md(item['date'])} {title} {names}")
         lines.append("")
 
     outside_work = data.get("outside_work", [])
@@ -645,7 +646,11 @@ def format_schedule_message(target: date, data: dict) -> str:
         lines.append("🚗 *외근*")
         for item in outside_work:
             names = ", ".join(escape_md(n) for n in item["names"])
-            lines.append(f"  • `{item['time']}` {names}")
+            title = escape_md(item["title"])
+            if item["time"] == "종일":
+                lines.append(f"  • {title} {names}")
+            else:
+                lines.append(f"  • `{item['time']}` {title} {names}")
         lines.append("")
 
     my_cards = data["my_cards"]

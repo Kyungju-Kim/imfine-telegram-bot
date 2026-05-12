@@ -509,7 +509,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 else:
                     outside_work.append({"names": assignees, "time": "종일", "time_raw": start_str or ""})
                     if _is_my_card(props, my_notion_user_id):
-                        my_cards.append({"title": title, "time": "종일", "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
+                        my_cards.append({"title": title, "time": None, "date": None, "room": "", "is_trip": True, "start_raw": start_str or "", "page_id": pid})
 
         else:
             if _is_my_card(props, my_notion_user_id):

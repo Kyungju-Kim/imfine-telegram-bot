@@ -350,7 +350,10 @@ async def fetch_my_cards_today(
                 category = extract_text(props[key])
                 break
 
-        if "휴가" in category or "조기퇴근" in category:
+        if "공휴일" in category:
+            vacation_result["공휴일"].append(title)
+
+        elif "휴가" in category or "조기퇴근" in category:
             continue
 
         title = ""
@@ -406,7 +409,8 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             "my_cards": []
         }
 
-    vacation_result = {"휴가": [], "오전반차": [], "오후반차": []}
+    vacation_result = {"휴가": [], "오전반차": [], "오후반차": [], "공휴일": []}
+    company_events = []  # 전사 일정
     business_trip = []
     outside_work = []
     my_cards = []
@@ -453,10 +457,23 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
             vacation_result[vacation_type].extend(assignees)
 
         elif (
+            "세미나" in category or "플레이샵" in category
+            or "신규입사" in category or "OKR Party" in category
+            or "복직" in category or "강의" in category
+        ):
+            assignees = _get_assignees(props)
+            company_events.append({
+                "title": title,
+                "names": assignees,
+                "start_raw": start_str or "",
+            })
+
+        elif (
             "출장" in category or "설치" in category or "외근" in category
             or "FineDay" in category or "전시참관" in category
             or "전시" in category or "영업" in category
             or "철거" in category or "현장실사" in category
+            or "워크샵" in category
         ):
             assignees = _get_assignees(props)
             start_val, start_has_time = parse_datetime_str(start_str)
@@ -506,11 +523,14 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     vacation_result["휴가"].sort()
     vacation_result["오전반차"].sort()
     vacation_result["오후반차"].sort()
+    vacation_result["공휴일"].sort()
+    company_events.sort(key=lambda x: x["start_raw"])
     business_trip.sort(key=lambda x: x["start_raw"])
     outside_work.sort(key=lambda x: "00:00" if not x["time_raw"] else x["time_raw"])
 
     return {
         "vacation": vacation_result,
+        "company_events": company_events,
         "business_trip": business_trip,
         "outside_work": outside_work,
         "my_cards": my_cards
@@ -544,11 +564,25 @@ def format_schedule_message(target: date, data: dict) -> str:
     date_str = escape_md(format_date_korean(target))
     lines = [f"📅 *{date_str} 일정*\n"]
 
+    company_events = data.get("company_events", [])
+    if company_events:
+        lines.append("🌟 *전사 일정*")
+        for item in company_events:
+            title = escape_md(item["title"])
+            if item["names"]:
+                names = ", ".join(escape_md(n) for n in item["names"])
+                lines.append(f"  • {title} {names}")
+            else:
+                lines.append(f"  • {title}")
+        lines.append("")
+
     vacation = data["vacation"]
     has_vacation = any(vacation.values())
 
     if has_vacation:
         lines.append("🏖 *휴가/반차*")
+        if vacation["공휴일"]:
+            lines.append(f"  • 공휴일: {', '.join(escape_md(n) for n in vacation['공휴일'])}")
         if vacation["휴가"]:
             lines.append(f"  • 휴가: {', '.join(escape_md(n) for n in vacation['휴가'])}")
         if vacation["오전반차"]:

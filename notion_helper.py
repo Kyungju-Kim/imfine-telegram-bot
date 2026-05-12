@@ -473,6 +473,7 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
                 "time": time_str,
                 "date": date_label,
                 "start_raw": start_str or "",
+                "page_id": pid,
             })
 
         elif _is_trip(category):
@@ -569,7 +570,7 @@ def format_schedule_message(target: date, data: dict) -> str:
     if company_events:
         lines.append("🌟 *전사 일정*")
         for item in company_events:
-            title = escape_md(item["title"])
+            title = _card_title_link(item)
             if item.get("time"):
                 prefix = f"`{item['time']}` "
             elif item.get("date") and "~" in item["date"]:

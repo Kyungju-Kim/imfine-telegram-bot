@@ -406,18 +406,82 @@ async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
 
 # ─── 전체 일정 조회 (아침 8시, /date, 등록 직후용) ───────────────────
 
-async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    try:
-        pages = await _query_pages(target)
-    except Exception as e:
-        print(f"[Notion API 오류] {e}")
-        return {
-            "vacation": {"휴가": [], "오전반차": [], "오후반차": [], "오전반반차": [], "오후반반차": [], "공휴일": []},
-            "company_events": [],
-            "business_trip": [],
-            "outside_work": [],
-            "my_cards": []
+def _filter_my_cards_from_pages(pages: list, target: date, my_notion_user_id: str) -> dict:
+    """이미 조회된 pages에서 내 카드만 필터링 (폴링용)"""
+    result = {}
+    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
+
+    for page in pages:
+        props = page.get("properties", {})
+        page_id = page["id"]
+
+        is_mine = False
+        for key in check_keys:
+            if key in props:
+                people = [p.get("id", "") for p in props[key].get("people", [])]
+                if my_notion_user_id in people:
+                    is_mine = True
+                    break
+
+        if not is_mine:
+            continue
+
+        date_prop = None
+        for key in ["기간", "날짜", "Date", "date", "일정"]:
+            if key in props:
+                date_prop = props[key]
+                break
+        if not date_prop:
+            continue
+
+        start_str, end_str = extract_date_range(date_prop)
+        if not is_card_on_date(start_str, end_str, target):
+            continue
+
+        category = ""
+        for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
+            if key in props:
+                category = extract_text(props[key])
+                break
+
+        if _is_excluded(category):
+            continue
+
+        title = ""
+        for key in ["Name", "이름", "name", "제목", "Title"]:
+            if key in props:
+                title = extract_text(props[key])
+                break
+
+        time_str, date_label, _ = _build_time_and_date(start_str, end_str)
+
+        room = ""
+        for key in ["회의실 예약", "회의실", "장소"]:
+            if key in props:
+                room = extract_text(props[key])
+                break
+
+        result[page_id] = {
+            "title": title,
+            "time": time_str,
+            "date": date_label,
+            "room": room,
+            "start_raw": start_str or "",
+            "end_raw": end_str or "",
+            "created_time": page.get("created_time", ""),
+            "edited_time": page.get("last_edited_time", ""),
+            "page_id": page_id,
+            "is_company_event": _is_company_event(category),
         }
+
+    return result
+    """이미 조회된 pages에서 유저별 일정 파싱"""
+
+
+
+async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
+    pages = await _query_pages(target)
+    return _parse_schedule_from_pages(pages, target, my_notion_user_id)
 
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": [], "오전반반차": [], "오후반반차": [], "공휴일": []}
     company_events = []

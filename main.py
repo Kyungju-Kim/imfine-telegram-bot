@@ -4,13 +4,14 @@ import asyncio
 from datetime import date
 
 import pytz
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -46,6 +47,7 @@ MSG_ERROR = (
     "• 잠시 후 다시 시도해주세요\n"
     "• 계속 문제가 생기면 관리자에게 문의해주세요"
 )
+MSG_LOADING = "⏳ 일정 불러오는 중..."
 
 _user_tasks: dict[int, asyncio.Task] = {}
 
@@ -69,7 +71,7 @@ async def send_my_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, o
         _user_tasks[telegram_id].cancel()
 
     async def _fetch_and_reply():
-        loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+        loading_msg = await update.message.reply_text(MSG_LOADING)
 
         try:
             target = get_target_date(offset)
@@ -120,7 +122,7 @@ async def send_full_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         return
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+    loading_msg = await update.message.reply_text(MSG_LOADING)
 
     try:
         data = await fetch_schedule(target, user["notion_user_id"])
@@ -134,6 +136,63 @@ async def send_full_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 # ─── 스케줄러: 매일 오전 8시 월~금 ───────────────────────────────────
 
+async def _send_daily_to_user(app, telegram_id: str, user_info: dict, target: date):
+    """단일 유저에게 오늘 일정 발송 (1회 재시도)"""
+    from schedule_monitor import refresh_baseline
+    from notion_helper import notion as notion_client
+
+    for attempt in range(2):
+        try:
+            data = await fetch_schedule(target, user_info["notion_user_id"])
+            message = format_schedule_message(target, data)
+
+            await app.bot.send_message(
+                chat_id=int(telegram_id),
+                text=message,
+                parse_mode="MarkdownV2",
+            )
+
+            logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료")
+
+            # 발송 성공 후 baseline 갱신 (실패해도 재발송 안 함)
+            try:
+                await refresh_baseline(
+                    app,
+                    notion_client,
+                    os.environ["NOTION_DATABASE_ID"],
+                    telegram_id,
+                    user_info,
+                )
+            except Exception as e:
+                logger.error(f"[스케줄러] {telegram_id} baseline 갱신 실패: {e}")
+                from schedule_monitor import _prev_state, _prev_state_date
+                _prev_state.pop(telegram_id, None)
+                _prev_state_date.pop(telegram_id, None)
+            return
+
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(f"[스케줄러] {telegram_id} 1차 실패, 5초 후 재시도: {e}")
+                await asyncio.sleep(5)
+            else:
+                logger.error(f"[스케줄러] {telegram_id} 최종 실패: {e}")
+                retry_keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 다시 시도", callback_data=f"retry_daily_{telegram_id}")
+                ]])
+                try:
+                    await app.bot.send_message(
+                        chat_id=int(telegram_id),
+                        text=(
+                            "⚠️ 일정을 불러오지 못했어요\\.\n\n"
+                            "아래 버튼을 눌러 다시 시도해주세요\\."
+                        ),
+                        parse_mode="MarkdownV2",
+                        reply_markup=retry_keyboard,
+                    )
+                except Exception:
+                    pass
+
+
 async def scheduled_daily(app):
     users = list_users()
 
@@ -142,16 +201,48 @@ async def scheduled_daily(app):
         return
 
     from schedule_monitor import refresh_baseline, _monitor_lock
-    from notion_helper import notion as notion_client
+    from notion_helper import notion as notion_client, _query_pages, _parse_schedule_from_pages
 
     target = get_target_date(0)
+
+    # 전체 페이지 1번만 조회 (최대 3회 재시도)
+    pages = None
+    for attempt in range(3):
+        try:
+            pages = await _query_pages(target)
+            break
+        except Exception as e:
+            if attempt < 2:
+                logger.warning(f"[스케줄러] 페이지 조회 실패 ({attempt+1}차), 10초 후 재시도: {e}")
+                await asyncio.sleep(10)
+            else:
+                logger.error(f"[스케줄러] 페이지 조회 최종 실패: {e}")
 
     async with _monitor_lock:
         for telegram_id, user_info in users.items():
             telegram_id = str(telegram_id)
 
+            if pages is None:
+                # 전체 조회 실패 시 유저별 버튼 발송
+                retry_keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 다시 시도", callback_data=f"retry_daily_{telegram_id}")
+                ]])
+                try:
+                    await app.bot.send_message(
+                        chat_id=int(telegram_id),
+                        text=(
+                            "⚠️ 일정을 불러오지 못했어요\\.\n\n"
+                            "아래 버튼을 눌러 다시 시도해주세요\\."
+                        ),
+                        parse_mode="MarkdownV2",
+                        reply_markup=retry_keyboard,
+                    )
+                except Exception:
+                    pass
+                continue
+
             try:
-                data = await fetch_schedule(target, user_info["notion_user_id"])
+                data = _parse_schedule_from_pages(pages, target, user_info["notion_user_id"])
                 message = format_schedule_message(target, data)
 
                 await app.bot.send_message(
@@ -159,6 +250,8 @@ async def scheduled_daily(app):
                     text=message,
                     parse_mode="MarkdownV2",
                 )
+
+                logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료")
 
                 try:
                     await refresh_baseline(
@@ -170,24 +263,77 @@ async def scheduled_daily(app):
                     )
                 except Exception as e:
                     logger.error(f"[스케줄러] {telegram_id} baseline 갱신 실패: {e}")
-                    # refresh_baseline 실패 시 _prev_state를 초기화해
-                    # 다음 폴링에서 첫 실행으로 처리되도록 함
                     from schedule_monitor import _prev_state, _prev_state_date
                     _prev_state.pop(telegram_id, None)
                     _prev_state_date.pop(telegram_id, None)
 
-                logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료")
-
             except Exception as e:
+                logger.error(f"[스케줄러] {telegram_id} 발송 실패: {e}")
+                retry_keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 다시 시도", callback_data=f"retry_daily_{telegram_id}")
+                ]])
                 try:
                     await app.bot.send_message(
                         chat_id=int(telegram_id),
-                        text="⚠️ 일정 발송 중 오류가 발생했어요\\!\n`/start` 로 상태 확인해주세요\\.",
+                        text=(
+                            "⚠️ 일정을 불러오지 못했어요\\.\n\n"
+                            "아래 버튼을 눌러 다시 시도해주세요\\."
+                        ),
                         parse_mode="MarkdownV2",
+                        reply_markup=retry_keyboard,
                     )
                 except Exception:
                     pass
-                logger.error(f"[스케줄러] {telegram_id} 발송 실패: {e}")
+
+
+# ─── 버튼 콜백: 오늘 일정 재시도 ────────────────────────────────────
+
+async def retry_daily_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = str(query.from_user.id)
+    user = get_user(int(telegram_id))
+
+    if not user:
+        await query.edit_message_text(
+            "❗ 등록된 유저를 찾을 수 없어요\\. `/register` 로 등록해주세요\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    await query.edit_message_text(MSG_LOADING)
+
+    try:
+        from notion_helper import notion as notion_client
+        from schedule_monitor import refresh_baseline
+
+        target = get_target_date(0)
+        data = await fetch_schedule(target, user["notion_user_id"])
+        message = format_schedule_message(target, data)
+
+        await query.edit_message_text(message, parse_mode="MarkdownV2")
+
+        await refresh_baseline(
+            context.application,
+            notion_client,
+            os.environ["NOTION_DATABASE_ID"],
+            telegram_id,
+            user,
+        )
+
+        logger.info(f"[재시도] {user['notion_name']} 발송 완료")
+
+    except Exception as e:
+        logger.error(f"[재시도 실패] {telegram_id}: {e}")
+        retry_keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 다시 시도", callback_data=f"retry_daily_{telegram_id}")
+        ]])
+        await query.edit_message_text(
+            "⚠️ 일정을 불러오지 못했어요\\. 잠시 후 다시 시도해주세요\\.",
+            parse_mode="MarkdownV2",
+            reply_markup=retry_keyboard,
+        )
 
 
 # ─── 모니터: 3분마다 일정 변경 감지 ─────────────────────────────────
@@ -280,7 +426,7 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     logger.info(f"[등록] {telegram_id} → {notion_user['name']} ({notion_user['id']})")
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+    loading_msg = await update.message.reply_text(MSG_LOADING)
 
     try:
         target = get_target_date(0)
@@ -459,7 +605,7 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from notion_helper import notion as notion_client
     from schedule_monitor import refresh_baseline, _format_remaining_cards
 
-    loading_msg = await update.message.reply_text("⏳ 일정 불러오는 중...")
+    loading_msg = await update.message.reply_text(MSG_LOADING)
 
     try:
         current = await refresh_baseline(
@@ -480,6 +626,8 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await loading_msg.edit_text(MSG_ERROR, parse_mode="MarkdownV2")
 
 
+# ─── 이름 입력 유도 핸들러 ───────────────────────────────────────────
+
 async def _ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(MSG_ENTER_NAME, parse_mode="MarkdownV2")
     return WAITING_NAME_FROM_START
@@ -490,7 +638,7 @@ async def _ask_name_register(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return WAITING_NAME
 
 
-# ─── 메인 ────────────────────────────────────────────────────────────
+# ─── 환경변수 검증 ───────────────────────────────────────────────────
 
 def _validate_env():
     required = {
@@ -516,11 +664,12 @@ def _validate_env():
         )
 
 
+# ─── 메인 ────────────────────────────────────────────────────────────
+
 def main():
     _validate_env()
 
     from user_store import restore_from_sheets
-
     restore_from_sheets()
 
     async def post_init(app):
@@ -577,6 +726,7 @@ def main():
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
     app.add_handler(CommandHandler("left", cmd_left))
+    app.add_handler(CallbackQueryHandler(retry_daily_callback, pattern=r"^retry_daily_"))
 
     scheduler = AsyncIOScheduler(timezone=KST)
 

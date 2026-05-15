@@ -58,12 +58,13 @@ async def _send_reminder(
 
     try:
         target = get_target_date(0)
-        current = await fetch_my_cards_today(
+        result = await fetch_my_cards_today(
             target,
             notion_user_id,
             notion_client=notion_client,
             database_id=database_id,
         )
+        current = result.get("my_cards", {})
 
         if page_id not in current:
             logger.info(f"[리마인더 skip] 삭제된 일정 {page_id}")
@@ -95,13 +96,21 @@ async def _send_reminder(
             f"  • `{card['time']}` {title}{room_part}"
         )
 
-        await app.bot.send_message(
-            chat_id=int(telegram_id),
-            text=message,
-            parse_mode="MarkdownV2"
-        )
-
-        logger.info(f"[5분 전 알림] {telegram_id} - {card['title']}")
+        for attempt in range(2):
+            try:
+                await app.bot.send_message(
+                    chat_id=int(telegram_id),
+                    text=message,
+                    parse_mode="MarkdownV2"
+                )
+                logger.info(f"[5분 전 알림] {telegram_id} - {card['title']}")
+                break
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(f"[5분 전 알림 재시도] {telegram_id}: {e}")
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"[5분 전 알림 실패] {telegram_id}: {e}")
 
     except Exception as e:
         logger.error(f"[5분 전 알림 실패] {telegram_id}: {e}")
@@ -238,12 +247,13 @@ async def refresh_baseline(app, notion_client, database_id: str, telegram_id: st
     telegram_id = str(telegram_id)
     target = get_target_date(0)
 
-    current = await fetch_my_cards_today(
+    result = await fetch_my_cards_today(
         target,
         user_info["notion_user_id"],
         notion_client=notion_client,
         database_id=database_id,
     )
+    current = result.get("my_cards", {})
 
     prev = _prev_state.get(telegram_id, {})
 
@@ -280,7 +290,25 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
         return
 
     async with _monitor_lock:
+        from notion_helper import _query_pages, _filter_my_cards_from_pages, get_target_date
+
         target = get_target_date(0)
+
+        # 전체 페이지 1번만 조회 (오늘치만, 2회 재시도)
+        pages = None
+        for attempt in range(2):
+            try:
+                pages = await _query_pages(target, long_range_days=0)
+                break
+            except Exception as e:
+                if attempt < 1:
+                    logger.warning(f"[모니터] 페이지 조회 실패, 5초 후 재시도: {e}")
+                    await asyncio.sleep(5)
+                else:
+                    logger.error(f"[모니터] 페이지 조회 최종 실패, 이번 폴링 스킵: {e}")
+
+        if pages is None:
+            return
 
         for telegram_id, user_info in users.items():
             telegram_id = str(telegram_id)
@@ -288,12 +316,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
             try:
                 notion_user_id = user_info["notion_user_id"]
 
-                current = await fetch_my_cards_today(
-                    target,
-                    notion_user_id,
-                    notion_client=notion_client,
-                    database_id=database_id,
-                )
+                current = _filter_my_cards_from_pages(pages, target, notion_user_id)
 
                 prev = _prev_state.get(telegram_id, None)
                 today = target
@@ -375,4 +398,4 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 )
 
             except Exception as e:
-                logger.error(f"[모니터] {telegram_id} 처리 실패: {e}")
+                logger.error(f"[모니터] {telegram_id} 처리 실패: {type(e).__name__}: {e}")

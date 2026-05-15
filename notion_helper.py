@@ -399,6 +399,11 @@ async def fetch_my_cards_today(
     return result
 
 
+async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
+    pages = await _query_pages(target)
+    return _parse_schedule_from_pages(pages, target, my_notion_user_id)
+
+
 async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
     cards = await fetch_my_cards_today(target, my_notion_user_id)
     return sorted(cards.values(), key=_sort_key)

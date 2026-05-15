@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from notion_client import AsyncClient
 from datetime import datetime, date, timedelta
 import os
@@ -11,6 +12,7 @@ LONG_RANGE_DAYS = 30
 NOTION_TIMEOUT = 10  # 초
 
 notion = AsyncClient(auth=NOTION_TOKEN)
+logger = logging.getLogger(__name__)
 
 # 휴가/공휴일 제외 카테고리
 EXCLUDED_CATEGORIES = {
@@ -543,7 +545,9 @@ async def fetch_my_cards_today(
     else:
         pages = await _query_pages(target)
 
-    return _filter_my_cards_from_pages(pages, target, my_notion_user_id)
+    result = _filter_my_cards_from_pages(pages, target, my_notion_user_id)
+    logger.info(f"[fetch_my_cards_today] {my_notion_user_id} - {len(result)}건 (pages: {len(pages)})")
+    return result
 
 
 async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:

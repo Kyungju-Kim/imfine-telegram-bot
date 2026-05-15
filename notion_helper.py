@@ -12,7 +12,7 @@ NOTION_TIMEOUT = 10  # 초
 
 notion = AsyncClient(auth=NOTION_TOKEN)
 
-# 휴가/공휴일 제외 카테고리 (my_cards에서 완전 제외)
+# 휴가/공휴일 제외 카테고리
 EXCLUDED_CATEGORIES = {
     "휴가", "조기퇴근", "공휴일",
 }
@@ -53,7 +53,6 @@ def format_date_korean(d: date) -> str:
 
 
 def escape_md(text: str) -> str:
-    """텔레그램 MarkdownV2 특수문자 이스케이프"""
     if not text:
         return ""
     for char in ['\\', '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
@@ -62,7 +61,6 @@ def escape_md(text: str) -> str:
 
 
 def escape_md_link_text(text: str) -> str:
-    """링크 텍스트용 이스케이프"""
     if not text:
         return ""
     text = text.replace('\\', '\\\\')
@@ -257,12 +255,10 @@ def _build_time_and_date(start_str, end_str):
 
 
 def _clean_title(title: str) -> str:
-    """[외근], [출장] 태그만 제거"""
     return title.replace('[외근]', '').replace('[출장]', '').strip()
 
 
 def _card_title_link(card: dict) -> str:
-    """제목에 노션 페이지 링크 연결 (MarkdownV2)"""
     title = escape_md_link_text(card.get("title") or "(제목 없음)")
     pid = card.get("page_id", "").replace("-", "")
     if pid:
@@ -279,215 +275,10 @@ def _sort_key(card: dict) -> str:
     return raw
 
 
-# ─── 내 카드 조회 (통합) ─────────────────────────────────────────────
+# ─── 페이지 파싱 헬퍼 ────────────────────────────────────────────────
 
-async def fetch_my_cards_today(
-    target: date,
-    my_notion_user_id: str,
-    notion_client=None,
-    database_id: str = None,
-) -> dict:
-    client = notion_client or notion
-    db_id = database_id or DATABASE_ID
-
-    if notion_client:
-        long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
-        pages = []
-        has_more = True
-        next_cursor = None
-
-        while has_more:
-            kwargs = {
-                "database_id": db_id,
-                "filter": {
-                    "or": [
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": long_range_start}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                    ]
-                },
-                "page_size": 100,
-            }
-            if next_cursor:
-                kwargs["start_cursor"] = next_cursor
-
-            response = await asyncio.wait_for(
-                client.databases.query(**kwargs),
-                timeout=NOTION_TIMEOUT,
-            )
-            pages.extend(response.get("results", []))
-            has_more = response.get("has_more", False)
-            next_cursor = response.get("next_cursor")
-    else:
-        pages = await _query_pages(target)
-
-    result = {}
-    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
-
-    for page in pages:
-        props = page.get("properties", {})
-        page_id = page["id"]
-
-        is_mine = False
-        for key in check_keys:
-            if key in props:
-                people = [p.get("id", "") for p in props[key].get("people", [])]
-                if my_notion_user_id in people:
-                    is_mine = True
-                    break
-
-        if not is_mine:
-            continue
-
-        date_prop = None
-        for key in ["기간", "날짜", "Date", "date", "일정"]:
-            if key in props:
-                date_prop = props[key]
-                break
-        if not date_prop:
-            continue
-
-        start_str, end_str = extract_date_range(date_prop)
-        if not is_card_on_date(start_str, end_str, target):
-            continue
-
-        category = ""
-        for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
-            if key in props:
-                category = extract_text(props[key])
-                break
-
-        if _is_excluded(category):
-            continue
-
-        title = ""
-        for key in ["Name", "이름", "name", "제목", "Title"]:
-            if key in props:
-                title = extract_text(props[key])
-                break
-
-        time_str, date_label, _ = _build_time_and_date(start_str, end_str)
-
-        room = ""
-        for key in ["회의실 예약", "회의실", "장소"]:
-            if key in props:
-                room = extract_text(props[key])
-                break
-
-        result[page_id] = {
-            "title": title,
-            "time": time_str,
-            "date": date_label,
-            "room": room,
-            "start_raw": start_str or "",
-            "end_raw": end_str or "",
-            "created_time": page.get("created_time", ""),
-            "edited_time": page.get("last_edited_time", ""),
-            "page_id": page_id,
-            "is_company_event": _is_company_event(category),  # ← 플래그 추가
-        }
-
-    return result
-
-
-async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    pages = await _query_pages(target)
-    return _parse_schedule_from_pages(pages, target, my_notion_user_id)
-
-
-async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
-    cards = await fetch_my_cards_today(target, my_notion_user_id)
-    return sorted(cards.values(), key=_sort_key)
-
-
-# ─── 전체 일정 조회 (아침 8시, /date, 등록 직후용) ───────────────────
-
-def _filter_my_cards_from_pages(pages: list, target: date, my_notion_user_id: str) -> dict:
-    """이미 조회된 pages에서 내 카드만 필터링 (폴링용)"""
-    result = {}
-    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
-
-    for page in pages:
-        props = page.get("properties", {})
-        page_id = page["id"]
-
-        is_mine = False
-        for key in check_keys:
-            if key in props:
-                people = [p.get("id", "") for p in props[key].get("people", [])]
-                if my_notion_user_id in people:
-                    is_mine = True
-                    break
-
-        if not is_mine:
-            continue
-
-        date_prop = None
-        for key in ["기간", "날짜", "Date", "date", "일정"]:
-            if key in props:
-                date_prop = props[key]
-                break
-        if not date_prop:
-            continue
-
-        start_str, end_str = extract_date_range(date_prop)
-        if not is_card_on_date(start_str, end_str, target):
-            continue
-
-        category = ""
-        for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
-            if key in props:
-                category = extract_text(props[key])
-                break
-
-        if _is_excluded(category):
-            continue
-
-        title = ""
-        for key in ["Name", "이름", "name", "제목", "Title"]:
-            if key in props:
-                title = extract_text(props[key])
-                break
-
-        time_str, date_label, _ = _build_time_and_date(start_str, end_str)
-
-        room = ""
-        for key in ["회의실 예약", "회의실", "장소"]:
-            if key in props:
-                room = extract_text(props[key])
-                break
-
-        result[page_id] = {
-            "title": title,
-            "time": time_str,
-            "date": date_label,
-            "room": room,
-            "start_raw": start_str or "",
-            "end_raw": end_str or "",
-            "created_time": page.get("created_time", ""),
-            "edited_time": page.get("last_edited_time", ""),
-            "page_id": page_id,
-            "is_company_event": _is_company_event(category),
-        }
-
-    return result
-    """이미 조회된 pages에서 유저별 일정 파싱"""
-
-
-
-async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
-    pages = await _query_pages(target)
-    return _parse_schedule_from_pages(pages, target, my_notion_user_id)
-
+def _parse_schedule_from_pages(pages: list, target: date, my_notion_user_id: str) -> dict:
+    """pages에서 전체 일정 파싱 (아침 8시 / /date 용)"""
     vacation_result = {"휴가": [], "오전반차": [], "오후반차": [], "오전반반차": [], "오후반반차": [], "공휴일": []}
     company_events = []
     business_trip = []
@@ -612,9 +403,9 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
 
     my_cards.sort(key=_sort_key)
     vacation_result["휴가"].sort()
+    vacation_result["오전반반차"].sort()
     vacation_result["오전반차"].sort()
     vacation_result["오후반차"].sort()
-    vacation_result["오전반반차"].sort()
     vacation_result["오후반반차"].sort()
     vacation_result["공휴일"].sort()
     company_events.sort(key=lambda x: x["start_raw"])
@@ -630,6 +421,141 @@ async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
     }
 
 
+def _filter_my_cards_from_pages(pages: list, target: date, my_notion_user_id: str) -> dict:
+    """pages에서 내 카드만 필터링 (폴링용)"""
+    result = {}
+    check_keys = ["Assign", "cc", "담당자", "Assignee", "담당", "할당", "CC", "참조", "관련자", "사람"]
+
+    for page in pages:
+        props = page.get("properties", {})
+        page_id = page["id"]
+
+        is_mine = False
+        for key in check_keys:
+            if key in props:
+                people = [p.get("id", "") for p in props[key].get("people", [])]
+                if my_notion_user_id in people:
+                    is_mine = True
+                    break
+
+        if not is_mine:
+            continue
+
+        date_prop = None
+        for key in ["기간", "날짜", "Date", "date", "일정"]:
+            if key in props:
+                date_prop = props[key]
+                break
+        if not date_prop:
+            continue
+
+        start_str, end_str = extract_date_range(date_prop)
+        if not is_card_on_date(start_str, end_str, target):
+            continue
+
+        category = ""
+        for key in ["범주", "카테고리", "Category", "category", "유형", "Type"]:
+            if key in props:
+                category = extract_text(props[key])
+                break
+
+        if _is_excluded(category):
+            continue
+
+        title = ""
+        for key in ["Name", "이름", "name", "제목", "Title"]:
+            if key in props:
+                title = extract_text(props[key])
+                break
+
+        time_str, date_label, _ = _build_time_and_date(start_str, end_str)
+
+        room = ""
+        for key in ["회의실 예약", "회의실", "장소"]:
+            if key in props:
+                room = extract_text(props[key])
+                break
+
+        result[page_id] = {
+            "title": title,
+            "time": time_str,
+            "date": date_label,
+            "room": room,
+            "start_raw": start_str or "",
+            "end_raw": end_str or "",
+            "created_time": page.get("created_time", ""),
+            "edited_time": page.get("last_edited_time", ""),
+            "page_id": page_id,
+            "is_company_event": _is_company_event(category),
+        }
+
+    return result
+
+
+# ─── 내 카드 조회 ────────────────────────────────────────────────────
+
+async def fetch_my_cards_today(
+    target: date,
+    my_notion_user_id: str,
+    notion_client=None,
+    database_id: str = None,
+) -> dict:
+    client = notion_client or notion
+    db_id = database_id or DATABASE_ID
+
+    if notion_client:
+        long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
+        pages = []
+        has_more = True
+        next_cursor = None
+
+        while has_more:
+            kwargs = {
+                "database_id": db_id,
+                "filter": {
+                    "or": [
+                        {
+                            "and": [
+                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
+                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
+                            ]
+                        },
+                        {
+                            "and": [
+                                {"property": "기간", "date": {"on_or_after": long_range_start}},
+                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
+                            ]
+                        },
+                    ]
+                },
+                "page_size": 100,
+            }
+            if next_cursor:
+                kwargs["start_cursor"] = next_cursor
+
+            response = await asyncio.wait_for(
+                client.databases.query(**kwargs),
+                timeout=NOTION_TIMEOUT,
+            )
+            pages.extend(response.get("results", []))
+            has_more = response.get("has_more", False)
+            next_cursor = response.get("next_cursor")
+    else:
+        pages = await _query_pages(target)
+
+    return _filter_my_cards_from_pages(pages, target, my_notion_user_id)
+
+
+async def fetch_my_schedule(target: date, my_notion_user_id: str) -> list:
+    cards = await fetch_my_cards_today(target, my_notion_user_id)
+    return sorted(cards.values(), key=_sort_key)
+
+
+async def fetch_schedule(target: date, my_notion_user_id: str) -> dict:
+    pages = await _query_pages(target)
+    return _parse_schedule_from_pages(pages, target, my_notion_user_id)
+
+
 # ─── 메시지 포맷 ──────────────────────────────────────────────────────
 
 def _fmt_card_line(card: dict) -> str:
@@ -641,7 +567,6 @@ def _fmt_card_line(card: dict) -> str:
 
 
 def _fmt_company_event_line(card: dict) -> str:
-    """전사 일정 한 줄 포맷 (시간/날짜 범위 prefix)"""
     title = _card_title_link(card)
     if card.get("time"):
         prefix = f"`{card['time']}` "
@@ -682,7 +607,7 @@ def format_schedule_message(target: date, data: dict) -> str:
                 prefix = ""
             if item["names"]:
                 names = ", ".join(escape_md(n) for n in item["names"])
-                lines.append(f"  • {prefix}{title} {names}")
+                lines.append(f"  • {prefix}{title} \\| {names}")
             else:
                 lines.append(f"  • {prefix}{title}")
         lines.append("")

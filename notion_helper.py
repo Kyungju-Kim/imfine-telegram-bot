@@ -6,8 +6,8 @@ import os
 import pytz
 
 KST = pytz.timezone("Asia/Seoul")
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
+DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "")
 LONG_RANGE_DAYS = 30
 NOTION_TIMEOUT = 10  # 초
 
@@ -149,8 +149,17 @@ def format_short_date(d) -> str:
 
 async def find_notion_user_by_name(name: str) -> tuple[dict | None, bool]:
     try:
-        response = await notion.users.list()
-        users = response.get("results", [])
+        users = []
+        has_more = True
+        next_cursor = None
+        while has_more:
+            kwargs = {}
+            if next_cursor:
+                kwargs["start_cursor"] = next_cursor
+            response = await notion.users.list(**kwargs)
+            users.extend(response.get("results", []))
+            has_more = response.get("has_more", False)
+            next_cursor = response.get("next_cursor")
         for user in users:
             if user.get("name") == name:
                 return {"id": user["id"], "name": user["name"]}, True
@@ -159,7 +168,7 @@ async def find_notion_user_by_name(name: str) -> tuple[dict | None, bool]:
                 return {"id": user["id"], "name": user["name"]}, True
         return None, True
     except Exception as e:
-        print(f"[Notion 유저 검색 오류] {e}")
+        logger.error(f"[Notion 유저 검색 오류] {e}")
         return None, False
 
 
@@ -496,55 +505,8 @@ def _filter_my_cards_from_pages(pages: list, target: date, my_notion_user_id: st
 
 # ─── 내 카드 조회 ────────────────────────────────────────────────────
 
-async def fetch_my_cards_today(
-    target: date,
-    my_notion_user_id: str,
-    notion_client=None,
-    database_id: str = None,
-) -> dict:
-    client = notion_client or notion
-    db_id = database_id or DATABASE_ID
-
-    if notion_client:
-        long_range_start = (target - timedelta(days=LONG_RANGE_DAYS)).isoformat()
-        pages = []
-        has_more = True
-        next_cursor = None
-
-        while has_more:
-            kwargs = {
-                "database_id": db_id,
-                "filter": {
-                    "or": [
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": target.isoformat()}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                        {
-                            "and": [
-                                {"property": "기간", "date": {"on_or_after": long_range_start}},
-                                {"property": "기간", "date": {"on_or_before": target.isoformat()}},
-                            ]
-                        },
-                    ]
-                },
-                "page_size": 100,
-            }
-            if next_cursor:
-                kwargs["start_cursor"] = next_cursor
-
-            response = await asyncio.wait_for(
-                client.databases.query(**kwargs),
-                timeout=NOTION_TIMEOUT,
-            )
-            pages.extend(response.get("results", []))
-            has_more = response.get("has_more", False)
-            next_cursor = response.get("next_cursor")
-    else:
-        pages = await _query_pages(target)
-
+async def fetch_my_cards_today(target: date, my_notion_user_id: str) -> dict:
+    pages = await _query_pages(target)
     result = _filter_my_cards_from_pages(pages, target, my_notion_user_id)
     logger.info(f"[fetch_my_cards_today] {my_notion_user_id} - {len(result)}건 (pages: {len(pages)})")
     return result

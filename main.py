@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 KST = pytz.timezone("Asia/Seoul")
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 
 WAITING_NAME = 1
 WAITING_DATE = 2

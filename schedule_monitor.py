@@ -58,12 +58,7 @@ async def _send_reminder(
 
     try:
         target = get_target_date(0)
-        result = await fetch_my_cards_today(
-            target,
-            notion_user_id,
-            notion_client=notion_client,
-            database_id=database_id,
-        )
+        result = await fetch_my_cards_today(target, notion_user_id)
         current = result
 
         if page_id not in current:
@@ -247,12 +242,7 @@ async def refresh_baseline(app, notion_client, database_id: str, telegram_id: st
     telegram_id = str(telegram_id)
     target = get_target_date(0)
 
-    result = await fetch_my_cards_today(
-        target,
-        user_info["notion_user_id"],
-        notion_client=notion_client,
-        database_id=database_id,
-    )
+    result = await fetch_my_cards_today(target, user_info["notion_user_id"])
     current = result
 
     prev = _prev_state.get(telegram_id, {})
@@ -298,7 +288,7 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
         pages = None
         for attempt in range(2):
             try:
-                pages = await _query_pages(target, long_range_days=0)
+                pages = await _query_pages(target)
                 break
             except Exception as e:
                 if attempt < 1:

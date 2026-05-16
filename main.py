@@ -561,9 +561,11 @@ def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
 
     keyboard = [
         [
+            InlineKeyboardButton("◀◀", callback_data=f"cal_pyear_{year - 1}_{month:02d}"),
             InlineKeyboardButton("◀", callback_data=f"cal_prev_{prev_year}_{prev_month:02d}"),
             InlineKeyboardButton(f"{year}년 {month}월", callback_data="cal_ignore"),
             InlineKeyboardButton("▶", callback_data=f"cal_next_{next_year}_{next_month:02d}"),
+            InlineKeyboardButton("▶▶", callback_data=f"cal_nyear_{year + 1}_{month:02d}"),
         ],
         [InlineKeyboardButton(d, callback_data="cal_ignore") for d in ["월", "화", "수", "목", "금", "토", "일"]],
     ]
@@ -577,6 +579,8 @@ def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
                 label = f"·{day}·" if date(year, month, day) == today else str(day)
                 row.append(InlineKeyboardButton(label, callback_data=f"cal_date_{year}_{month:02d}_{day:02d}"))
         keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("✏️ 직접 입력", callback_data="cal_input")])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -598,7 +602,7 @@ async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "cal_ignore":
         return
 
-    if data.startswith("cal_prev_") or data.startswith("cal_next_"):
+    if data.startswith(("cal_prev_", "cal_next_", "cal_pyear_", "cal_nyear_")):
         parts = data.split("_")
         year, month = int(parts[2]), int(parts[3])
         new_markup = build_calendar(year, month)
@@ -606,6 +610,17 @@ async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             query.answer(),
             query.edit_message_reply_markup(reply_markup=new_markup),
         )
+        return
+
+    if data == "cal_input":
+        await asyncio.gather(
+            query.answer(),
+            query.edit_message_text(
+                "📅 날짜를 입력해주세요\\!\n예: `2026\\-01\\-15`",
+                parse_mode="MarkdownV2",
+            ),
+        )
+        context.user_data["awaiting_date"] = True
         return
 
     if data.startswith("cal_date_"):
@@ -632,6 +647,43 @@ async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"[캘린더 일정 조회 실패] {telegram_id}: {e}")
             await query.edit_message_text(MSG_ERROR, parse_mode="MarkdownV2")
+
+
+# ─── /date 직접 입력 처리 ────────────────────────────────────────────
+
+async def date_text_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_date"):
+        return
+
+    context.user_data.pop("awaiting_date", None)
+    telegram_id = update.effective_chat.id
+    user = get_user(telegram_id)
+
+    if not user:
+        await update.message.reply_text(
+            "먼저 `/register` 로 등록해주세요\\!",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    try:
+        target = date.fromisoformat(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text(
+            "`YYYY\\-MM\\-DD` 형식으로 입력해주세요\\!\n예: `2026\\-01\\-15`\n\n다시 조회하려면 `/date`",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    loading_msg = await update.message.reply_text(MSG_LOADING)
+
+    try:
+        schedule_data = await fetch_schedule(target, user["notion_user_id"])
+        message = format_schedule_message(target, schedule_data)
+        await loading_msg.edit_text(message, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"[날짜 직접 입력 조회 실패] {telegram_id}: {e}")
+        await loading_msg.edit_text(MSG_ERROR, parse_mode="MarkdownV2")
 
 
 # ─── 기타 커맨드 ─────────────────────────────────────────────────────
@@ -764,6 +816,7 @@ def main():
     app.add_handler(CommandHandler("left", cmd_left))
     app.add_handler(CallbackQueryHandler(retry_daily_callback, pattern=r"^retry_daily_"))
     app.add_handler(CallbackQueryHandler(calendar_callback, pattern=r"^cal_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, date_text_received))
 
     scheduler = AsyncIOScheduler(timezone=KST)
 

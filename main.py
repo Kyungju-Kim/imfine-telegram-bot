@@ -601,7 +601,11 @@ async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("cal_prev_") or data.startswith("cal_next_"):
         parts = data.split("_")
         year, month = int(parts[2]), int(parts[3])
-        await query.edit_message_reply_markup(reply_markup=build_calendar(year, month))
+        new_markup = build_calendar(year, month)
+        await asyncio.gather(
+            query.answer(),
+            query.edit_message_reply_markup(reply_markup=new_markup),
+        )
         return
 
     if data.startswith("cal_date_"):

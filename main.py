@@ -567,7 +567,7 @@ def build_menu_keyboard() -> InlineKeyboardMarkup:
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⠀",
+        "ㅤ",  # U+3164 Hangul Filler — Telegram accepts as non-empty but renders invisibly
         reply_markup=build_menu_keyboard(),
     )
 

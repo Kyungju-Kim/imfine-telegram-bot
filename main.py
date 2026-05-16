@@ -561,11 +561,9 @@ def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
 
     keyboard = [
         [
-            InlineKeyboardButton("◀◀", callback_data=f"cal_pyear_{year - 1}_{month:02d}"),
             InlineKeyboardButton("◀", callback_data=f"cal_prev_{prev_year}_{prev_month:02d}"),
             InlineKeyboardButton(f"{year}년 {month}월", callback_data="cal_ignore"),
             InlineKeyboardButton("▶", callback_data=f"cal_next_{next_year}_{next_month:02d}"),
-            InlineKeyboardButton("▶▶", callback_data=f"cal_nyear_{year + 1}_{month:02d}"),
         ],
         [InlineKeyboardButton(d, callback_data="cal_ignore") for d in ["월", "화", "수", "목", "금", "토", "일"]],
     ]
@@ -602,7 +600,7 @@ async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "cal_ignore":
         return
 
-    if data.startswith(("cal_prev_", "cal_next_", "cal_pyear_", "cal_nyear_")):
+    if data.startswith(("cal_prev_", "cal_next_")):
         parts = data.split("_")
         year, month = int(parts[2]), int(parts[3])
         new_markup = build_calendar(year, month)

@@ -64,7 +64,7 @@ async def _send_reminder(
             notion_client=notion_client,
             database_id=database_id,
         )
-        current = result.get("my_cards", {})
+        current = result
 
         if page_id not in current:
             logger.info(f"[리마인더 skip] 삭제된 일정 {page_id}")
@@ -253,7 +253,7 @@ async def refresh_baseline(app, notion_client, database_id: str, telegram_id: st
         notion_client=notion_client,
         database_id=database_id,
     )
-    current = result.get("my_cards", {})
+    current = result
 
     prev = _prev_state.get(telegram_id, {})
 

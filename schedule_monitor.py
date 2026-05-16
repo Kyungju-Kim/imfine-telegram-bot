@@ -10,6 +10,7 @@ import os
 from datetime import datetime, time, timedelta, date
 from zoneinfo import ZoneInfo
 
+from telegram.error import Forbidden
 from notion_helper import fetch_my_cards_today, get_target_date
 
 logger = logging.getLogger(__name__)
@@ -372,20 +373,21 @@ async def check_and_notify(app, notion_client, database_id: str, users: dict):
                 body = _format_remaining_cards(current)
                 message = f"{header}\n{detail}\n\n📅 *오늘 남은 일정*\n{body}"
 
-                await app.bot.send_message(
-                    chat_id=int(telegram_id),
-                    text=message,
-                    parse_mode="MarkdownV2"
-                )
-
-                # 발송 성공 후 상태 갱신
-                _prev_state[telegram_id] = _make_state(current)
-                _prev_state_date[telegram_id] = today
-
-                logger.info(
-                    f"[모니터] {user_info['notion_name']} 변경 알림 발송 "
-                    f"(새:{len(new_ids)} 변경:{len(changed_ids)} 삭제:{len(deleted_ids)})"
-                )
+                try:
+                    await app.bot.send_message(
+                        chat_id=int(telegram_id),
+                        text=message,
+                        parse_mode="MarkdownV2"
+                    )
+                    logger.info(
+                        f"[모니터] {user_info['notion_name']} 변경 알림 발송 "
+                        f"(새:{len(new_ids)} 변경:{len(changed_ids)} 삭제:{len(deleted_ids)})"
+                    )
+                except Forbidden:
+                    logger.warning(f"[모니터] {telegram_id} 봇 차단됨 — 알림 스킵, 상태 갱신")
+                finally:
+                    _prev_state[telegram_id] = _make_state(current)
+                    _prev_state_date[telegram_id] = today
 
             except Exception as e:
                 logger.error(f"[모니터] {telegram_id} 처리 실패: {type(e).__name__}: {e}")

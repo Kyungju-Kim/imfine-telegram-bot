@@ -552,11 +552,14 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
 def build_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📅 오늘 일정", callback_data="menu_today"),
-            InlineKeyboardButton("📌 남은 일정", callback_data="menu_left"),
+            InlineKeyboardButton("📋 오늘 전체 일정", callback_data="menu_daily"),
         ],
         [
-            InlineKeyboardButton("📅 내일 일정", callback_data="menu_tomorrow"),
+            InlineKeyboardButton("📅 오늘 내 일정", callback_data="menu_today"),
+            InlineKeyboardButton("⏳ 남은 일정", callback_data="menu_left"),
+        ],
+        [
+            InlineKeyboardButton("📅 내일 내 일정", callback_data="menu_tomorrow"),
             InlineKeyboardButton("🗓 날짜 조회", callback_data="menu_date"),
         ],
         [
@@ -580,7 +583,24 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = query.from_user.id
     user = get_user(telegram_id)
 
-    if data in ("menu_today", "menu_tomorrow"):
+    if data == "menu_daily":
+        if not user:
+            await query.edit_message_text(
+                "❗ 아직 등록이 안 됐어요\\!\n`/register` 로 등록해주세요\\.",
+                parse_mode="MarkdownV2",
+            )
+            return
+        await query.edit_message_text(MSG_LOADING)
+        try:
+            target = get_target_date(0)
+            schedule_data = await fetch_schedule(target, user["notion_user_id"])
+            message = format_schedule_message(target, schedule_data)
+            await query.edit_message_text(message, parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.error(f"[메뉴 전체 일정 조회 실패] {telegram_id}: {e}")
+            await query.edit_message_text(MSG_ERROR, parse_mode="MarkdownV2")
+
+    elif data in ("menu_today", "menu_tomorrow"):
         if not user:
             await query.edit_message_text(
                 "❗ 아직 등록이 안 됐어요\\!\n`/register` 로 등록해주세요\\.",

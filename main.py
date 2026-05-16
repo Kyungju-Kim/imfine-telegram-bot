@@ -5,7 +5,7 @@ import calendar
 from datetime import date, datetime
 
 import pytz
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -381,14 +381,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"상태: ✅ 등록됨: *{name}*\n\n"
         f"✓ 평일 오전 8시 오늘 일정 안내\n"
         f"✓ 일정 추가/변경 시 실시간 알림\n"
-        f"✓ 일정 시작 5분 전 미리 알림\n\n"
-        f"*사용법*\n"
-        f"`/left` \\- 오늘 남은 일정\n"
-        f"`/today` \\- 오늘 내 일정\n"
-        f"`/tomorrow` \\- 내일 내 일정\n"
-        f"`/date` \\- 특정 날짜 전체 일정\n"
-        f"`/register` \\- 노션 이름으로 등록",
+        f"✓ 일정 시작 5분 전 미리 알림",
         parse_mode="MarkdownV2",
+        reply_markup=build_menu_keyboard(),
     )
 
     return ConversationHandler.END
@@ -552,6 +547,100 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
+# ─── 메뉴 ────────────────────────────────────────────────────────────
+
+def build_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📅 오늘 일정", callback_data="menu_today"),
+            InlineKeyboardButton("📌 남은 일정", callback_data="menu_left"),
+        ],
+        [
+            InlineKeyboardButton("📅 내일 일정", callback_data="menu_tomorrow"),
+            InlineKeyboardButton("🗓 날짜 조회", callback_data="menu_date"),
+        ],
+        [
+            InlineKeyboardButton("👤 등록 변경", callback_data="menu_register"),
+        ],
+    ])
+
+
+async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "무엇을 도와드릴까요?",
+        reply_markup=build_menu_keyboard(),
+    )
+
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    telegram_id = query.from_user.id
+    user = get_user(telegram_id)
+
+    if data in ("menu_today", "menu_tomorrow"):
+        if not user:
+            await query.edit_message_text(
+                "❗ 아직 등록이 안 됐어요\\!\n`/register` 로 등록해주세요\\.",
+                parse_mode="MarkdownV2",
+            )
+            return
+        offset = 0 if data == "menu_today" else 1
+        await query.edit_message_text(MSG_LOADING)
+        try:
+            target = get_target_date(offset)
+            cards = await fetch_my_schedule(target, user["notion_user_id"])
+            message = format_my_schedule_message(target, cards)
+            await query.edit_message_text(message, parse_mode="MarkdownV2")
+            if offset == 0:
+                from notion_helper import notion as notion_client
+                from schedule_monitor import refresh_baseline
+                await refresh_baseline(
+                    context.application, notion_client,
+                    os.environ["NOTION_DATABASE_ID"], str(telegram_id), user,
+                )
+        except Exception as e:
+            logger.error(f"[메뉴 일정 조회 실패] {telegram_id}: {e}")
+            await query.edit_message_text(MSG_ERROR, parse_mode="MarkdownV2")
+
+    elif data == "menu_left":
+        if not user:
+            await query.edit_message_text(
+                "❗ 아직 등록이 안 됐어요\\!\n`/register` 로 등록해주세요\\.",
+                parse_mode="MarkdownV2",
+            )
+            return
+        from notion_helper import notion as notion_client
+        from schedule_monitor import refresh_baseline, _format_remaining_cards
+        await query.edit_message_text(MSG_LOADING)
+        try:
+            current = await refresh_baseline(
+                context.application, notion_client,
+                os.environ["NOTION_DATABASE_ID"], str(telegram_id), user,
+            )
+            body = _format_remaining_cards(current)
+            await query.edit_message_text(f"📅 *오늘 남은 일정*\n{body}", parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.error(f"[메뉴 남은 일정 조회 실패] {telegram_id}: {e}")
+            await query.edit_message_text(MSG_ERROR, parse_mode="MarkdownV2")
+
+    elif data == "menu_date":
+        now = datetime.now(KST)
+        await query.edit_message_text(
+            "📅 날짜를 선택해주세요:",
+            reply_markup=build_calendar(now.year, now.month),
+        )
+
+    elif data == "menu_register":
+        await query.edit_message_text(
+            "노션에 등록된 이름을 입력해주세요 😊\n예: `홍길동`",
+            parse_mode="MarkdownV2",
+        )
+        context.user_data["awaiting_register"] = True
+
+
 # ─── /date 캘린더 ────────────────────────────────────────────────────
 
 def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
@@ -647,41 +736,66 @@ async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(MSG_ERROR, parse_mode="MarkdownV2")
 
 
-# ─── /date 직접 입력 처리 ────────────────────────────────────────────
+# ─── 텍스트 직접 입력 처리 (날짜 조회 / 메뉴 등록 변경) ───────────────
 
-async def date_text_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("awaiting_date"):
-        return
-
-    context.user_data.pop("awaiting_date", None)
+async def text_input_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_chat.id
-    user = get_user(telegram_id)
 
-    if not user:
+    if context.user_data.get("awaiting_date"):
+        context.user_data.pop("awaiting_date", None)
+        user = get_user(telegram_id)
+        if not user:
+            await update.message.reply_text(
+                "먼저 `/register` 로 등록해주세요\\!",
+                parse_mode="MarkdownV2",
+            )
+            return
+        try:
+            target = date.fromisoformat(update.message.text.strip())
+        except ValueError:
+            await update.message.reply_text(
+                "`YYYY\\-MM\\-DD` 형식으로 입력해주세요\\!\n예: `2026\\-01\\-15`\n\n다시 조회하려면 `/date`",
+                parse_mode="MarkdownV2",
+            )
+            return
+        loading_msg = await update.message.reply_text(MSG_LOADING)
+        try:
+            schedule_data = await fetch_schedule(target, user["notion_user_id"])
+            message = format_schedule_message(target, schedule_data)
+            await loading_msg.edit_text(message, parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.error(f"[날짜 직접 입력 조회 실패] {telegram_id}: {e}")
+            await loading_msg.edit_text(MSG_ERROR, parse_mode="MarkdownV2")
+
+    elif context.user_data.get("awaiting_register"):
+        context.user_data.pop("awaiting_register", None)
+        name = update.message.text.strip()
         await update.message.reply_text(
-            "먼저 `/register` 로 등록해주세요\\!",
+            f"🔍 노션에서 *{escape_md(name)}* 찾는 중\.\.\.",
             parse_mode="MarkdownV2",
         )
-        return
-
-    try:
-        target = date.fromisoformat(update.message.text.strip())
-    except ValueError:
+        notion_user, success = await find_notion_user_by_name(name)
+        if not success:
+            await update.message.reply_text(
+                "⚠️ 노션 연결에 문제가 생겼어요\\. 잠시 후 다시 시도해주세요\\.",
+                parse_mode="MarkdownV2",
+            )
+            return
+        if not notion_user:
+            await update.message.reply_text(
+                f"❌ 노션 워크스페이스에서 *{escape_md(name)}* 을 찾을 수 없어요\\.\n\n"
+                f"• 노션에 표시되는 정확한 이름인지 확인해주세요\n\n"
+                f"다시 시도하려면 👤 등록 변경을 눌러주세요",
+                parse_mode="MarkdownV2",
+            )
+            return
+        register_user(telegram_id, notion_user["id"], notion_user["name"])
         await update.message.reply_text(
-            "`YYYY\\-MM\\-DD` 형식으로 입력해주세요\\!\n예: `2026\\-01\\-15`\n\n다시 조회하려면 `/date`",
+            f"✅ 등록 완료\\!\n이름: *{escape_md(notion_user['name'])}*",
             parse_mode="MarkdownV2",
+            reply_markup=build_menu_keyboard(),
         )
-        return
-
-    loading_msg = await update.message.reply_text(MSG_LOADING)
-
-    try:
-        schedule_data = await fetch_schedule(target, user["notion_user_id"])
-        message = format_schedule_message(target, schedule_data)
-        await loading_msg.edit_text(message, parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.error(f"[날짜 직접 입력 조회 실패] {telegram_id}: {e}")
-        await loading_msg.edit_text(MSG_ERROR, parse_mode="MarkdownV2")
+        logger.info(f"[메뉴 등록] {telegram_id} → {notion_user['name']}")
 
 
 # ─── 기타 커맨드 ─────────────────────────────────────────────────────
@@ -776,6 +890,15 @@ def main():
     restore_from_sheets()
 
     async def post_init(app):
+        await app.bot.set_my_commands([
+            BotCommand("menu", "메뉴"),
+            BotCommand("today", "오늘 내 일정"),
+            BotCommand("tomorrow", "내일 내 일정"),
+            BotCommand("left", "오늘 남은 일정"),
+            BotCommand("date", "날짜별 전체 일정"),
+            BotCommand("register", "노션 이름으로 등록"),
+            BotCommand("start", "시작"),
+        ])
         asyncio.create_task(run_monitor(app))
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
@@ -808,13 +931,15 @@ def main():
     app.add_handler(start_handler)
     app.add_handler(register_handler)
 
+    app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CommandHandler("date", cmd_date))
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
     app.add_handler(CommandHandler("left", cmd_left))
     app.add_handler(CallbackQueryHandler(retry_daily_callback, pattern=r"^retry_daily_"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu_"))
     app.add_handler(CallbackQueryHandler(calendar_callback, pattern=r"^cal_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, date_text_received))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_received))
 
     scheduler = AsyncIOScheduler(timezone=KST)
 

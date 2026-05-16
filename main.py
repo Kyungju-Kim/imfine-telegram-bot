@@ -245,13 +245,20 @@ async def scheduled_daily(app):
                 data = _parse_schedule_from_pages(pages, target, user_info["notion_user_id"])
                 message = format_schedule_message(target, data)
 
+                vacation = data.get("vacation", {})
+                silent = (
+                    user_info["notion_name"] in vacation.get("휴가", [])
+                    or bool(vacation.get("공휴일", []))
+                )
+
                 await app.bot.send_message(
                     chat_id=int(telegram_id),
                     text=message,
                     parse_mode="MarkdownV2",
+                    disable_notification=silent,
                 )
 
-                logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료")
+                logger.info(f"[스케줄러] {user_info['notion_name']} 발송 완료 (silent={silent})")
 
                 try:
                     await refresh_baseline(

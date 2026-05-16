@@ -1,7 +1,8 @@
 import os
 import logging
 import asyncio
-from datetime import date
+import calendar
+from datetime import date, datetime
 
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -38,7 +39,6 @@ KST = pytz.timezone("Asia/Seoul")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 
 WAITING_NAME = 1
-WAITING_DATE = 2
 WAITING_NAME_FROM_START = 3
 
 MSG_ENTER_NAME = "노션에 등록된 이름을 입력해주세요 😊\n예: `홍길동`"
@@ -552,40 +552,82 @@ async def register_name_received(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
-# ─── /date 대화 ──────────────────────────────────────────────────────
+# ─── /date 캘린더 ────────────────────────────────────────────────────
+
+def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
+    today = datetime.now(KST).date()
+    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+    keyboard = [
+        [
+            InlineKeyboardButton("◀", callback_data=f"cal_prev_{prev_year}_{prev_month:02d}"),
+            InlineKeyboardButton(f"{year}년 {month}월", callback_data="cal_ignore"),
+            InlineKeyboardButton("▶", callback_data=f"cal_next_{next_year}_{next_month:02d}"),
+        ],
+        [InlineKeyboardButton(d, callback_data="cal_ignore") for d in ["월", "화", "수", "목", "금", "토", "일"]],
+    ]
+
+    for week in calendar.monthcalendar(year, month):
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="cal_ignore"))
+            else:
+                label = f"·{day}·" if date(year, month, day) == today else str(day)
+                row.append(InlineKeyboardButton(label, callback_data=f"cal_date_{year}_{month:02d}_{day:02d}"))
+        keyboard.append(row)
+
+    return InlineKeyboardMarkup(keyboard)
+
 
 async def cmd_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now(KST)
     await update.message.reply_text(
-        "조회할 날짜를 입력해주세요\\!\n예: `2024\\-01\\-15`",
-        parse_mode="MarkdownV2",
+        "📅 날짜를 선택해주세요:",
+        reply_markup=build_calendar(now.year, now.month),
     )
-    return WAITING_DATE
 
 
-async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    telegram_id = update.effective_chat.id
-    user = get_user(telegram_id)
+async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if not user:
-        await update.message.reply_text(
-            "먼저 `/register` 로 등록해주세요\\!",
-            parse_mode="MarkdownV2",
-        )
-        return ConversationHandler.END
+    data = query.data
 
-    try:
-        d = date.fromisoformat(update.message.text.strip())
-        await send_full_schedule(update, context, d)
+    if data == "cal_ignore":
+        return
 
-    except ValueError:
-        await update.message.reply_text(
-            "`YYYY\\-MM\\-DD` 형식으로 입력해주세요\\!\n"
-            "예: `2024\\-01\\-15`\n\n"
-            "다시 시도하려면 `/date`",
-            parse_mode="MarkdownV2",
-        )
+    if data.startswith("cal_prev_") or data.startswith("cal_next_"):
+        parts = data.split("_")
+        year, month = int(parts[2]), int(parts[3])
+        await query.edit_message_reply_markup(reply_markup=build_calendar(year, month))
+        return
 
-    return ConversationHandler.END
+    if data.startswith("cal_date_"):
+        parts = data.split("_")
+        year, month, day = int(parts[2]), int(parts[3]), int(parts[4])
+        target = date(year, month, day)
+
+        telegram_id = query.from_user.id
+        user = get_user(telegram_id)
+
+        if not user:
+            await query.edit_message_text(
+                "먼저 `/register` 로 등록해주세요\\!",
+                parse_mode="MarkdownV2",
+            )
+            return
+
+        await query.edit_message_text(MSG_LOADING)
+
+        try:
+            schedule_data = await fetch_schedule(target, user["notion_user_id"])
+            message = format_schedule_message(target, schedule_data)
+            await query.edit_message_text(message, parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.error(f"[캘린더 일정 조회 실패] {telegram_id}: {e}")
+            await query.edit_message_text(MSG_ERROR, parse_mode="MarkdownV2")
 
 
 # ─── 기타 커맨드 ─────────────────────────────────────────────────────
@@ -709,31 +751,15 @@ def main():
         ],
     )
 
-    date_handler = ConversationHandler(
-        entry_points=[CommandHandler("date", cmd_date)],
-        states={
-            WAITING_DATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, date_received)
-            ]
-        },
-        fallbacks=[
-            CommandHandler("start", cmd_start),
-            CommandHandler("today", cmd_today),
-            CommandHandler("tomorrow", cmd_tomorrow),
-            CommandHandler("left", cmd_left),
-            CommandHandler("date", cmd_date),
-            CommandHandler("register", cmd_register),
-        ],
-    )
-
     app.add_handler(start_handler)
     app.add_handler(register_handler)
-    app.add_handler(date_handler)
 
+    app.add_handler(CommandHandler("date", cmd_date))
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
     app.add_handler(CommandHandler("left", cmd_left))
     app.add_handler(CallbackQueryHandler(retry_daily_callback, pattern=r"^retry_daily_"))
+    app.add_handler(CallbackQueryHandler(calendar_callback, pattern=r"^cal_"))
 
     scheduler = AsyncIOScheduler(timezone=KST)
 

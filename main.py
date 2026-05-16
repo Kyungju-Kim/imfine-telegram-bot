@@ -567,7 +567,7 @@ def build_menu_keyboard() -> InlineKeyboardMarkup:
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "원하는 메뉴를 선택하세요\\.",
+        "원하는 메뉴를 선택하세요.",
         reply_markup=build_menu_keyboard(),
     )
 

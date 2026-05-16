@@ -567,7 +567,7 @@ def build_menu_keyboard() -> InlineKeyboardMarkup:
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "​",
+        "⠀",
         reply_markup=build_menu_keyboard(),
     )
 

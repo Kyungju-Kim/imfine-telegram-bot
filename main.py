@@ -562,15 +562,12 @@ def build_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📅 내일 내 일정", callback_data="menu_tomorrow"),
             InlineKeyboardButton("🗓 날짜 조회", callback_data="menu_date"),
         ],
-        [
-            InlineKeyboardButton("👤 등록 변경", callback_data="menu_register"),
-        ],
     ])
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "무엇을 도와드릴까요?",
+        "​",
         reply_markup=build_menu_keyboard(),
     )
 

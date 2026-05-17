@@ -466,6 +466,7 @@ async def start_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─── /register 대화 ──────────────────────────────────────────────────
 
 async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _clear_calendar(context, update.effective_chat.id)
     await update.message.reply_text(
         MSG_ENTER_NAME,
         parse_mode="MarkdownV2",
@@ -566,6 +567,7 @@ def build_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _clear_calendar(context, update.effective_chat.id)
     await update.message.reply_text(
         "원하는 메뉴를 선택해주세요.",
         reply_markup=build_menu_keyboard(),
@@ -649,6 +651,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📅 날짜를 선택해주세요:",
             reply_markup=build_calendar(now.year, now.month),
         )
+        context.user_data["calendar_msg_id"] = query.message.message_id
 
     elif data == "menu_register":
         await query.edit_message_text(
@@ -656,6 +659,18 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="MarkdownV2",
         )
         context.user_data["awaiting_register"] = True
+
+
+# ─── 캘린더 정리 헬퍼 ────────────────────────────────────────────────
+
+async def _clear_calendar(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """이전에 띄운 캘린더 메시지가 있으면 삭제."""
+    msg_id = context.user_data.pop("calendar_msg_id", None)
+    if msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
 
 
 # ─── /date 캘린더 ────────────────────────────────────────────────────
@@ -690,11 +705,13 @@ def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
 
 
 async def cmd_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _clear_calendar(context, update.effective_chat.id)
     now = datetime.now(KST)
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         "📅 날짜를 선택해주세요:",
         reply_markup=build_calendar(now.year, now.month),
     )
+    context.user_data["calendar_msg_id"] = sent.message_id
 
 
 async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -818,15 +835,18 @@ async def text_input_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─── 기타 커맨드 ─────────────────────────────────────────────────────
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _clear_calendar(context, update.effective_chat.id)
     await send_my_schedule(update, context, offset=0)
 
 
 async def cmd_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _clear_calendar(context, update.effective_chat.id)
     await send_my_schedule(update, context, offset=1)
 
 
 async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_chat.id
+    await _clear_calendar(context, telegram_id)
     user = get_user(telegram_id)
 
     if not user:
@@ -863,11 +883,13 @@ async def cmd_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── 이름 입력 유도 핸들러 ───────────────────────────────────────────
 
 async def _ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _clear_calendar(context, update.effective_chat.id)
     await update.message.reply_text(MSG_ENTER_NAME, parse_mode="MarkdownV2")
     return WAITING_NAME_FROM_START
 
 
 async def _ask_name_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _clear_calendar(context, update.effective_chat.id)
     await update.message.reply_text(MSG_ENTER_NAME, parse_mode="MarkdownV2")
     return WAITING_NAME
 

@@ -671,10 +671,10 @@ def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{year}년 {month}월", callback_data="cal_ignore"),
             InlineKeyboardButton("▶", callback_data=f"cal_next_{next_year}_{next_month:02d}"),
         ],
-        [InlineKeyboardButton(d, callback_data="cal_ignore") for d in ["월", "화", "수", "목", "금", "토", "일"]],
+        [InlineKeyboardButton(d, callback_data="cal_ignore") for d in ["일", "월", "화", "수", "목", "금", "토"]],
     ]
 
-    for week in calendar.monthcalendar(year, month):
+    for week in calendar.Calendar(firstweekday=6).monthdayscalendar(year, month):
         row = []
         for day in week:
             if day == 0:
